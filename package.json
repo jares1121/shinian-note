@@ -1,0 +1,34 @@
+{
+  "name": "shinian-note",
+  "productName": "拾念",
+  "version": "0.1.0",
+  "description": "拾念 · 随时记录",
+  "author": "shinian",
+  "main": "./out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "dist": "npm run build && electron-builder --win",
+    "dist:portable": "npm run build && electron-builder --win portable",
+    "dist:dir": "npm run build && electron-builder --win --dir"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "3.6.1",
+    "@tailwindcss/vite": "^4.0.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "echarts": "^6.1.0",
+    "electron": "^31.7.6",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "marked": "^15.0.0",
+    "tailwindcss": "^4.0.0",
+    "vite": "^5.4.11",
+    "vue": "^3.5.13"
+  }
+}

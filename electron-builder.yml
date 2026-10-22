@@ -1,0 +1,43 @@
+appId: com.shinian.note
+productName: 拾念
+copyright: Copyright © 2026 拾念
+
+directories:
+  output: release
+  buildResources: assets
+
+# 只打进构建产物、图标和 package.json（生产依赖 electron-builder 会自动带上）
+files:
+  - out/**/*
+  - assets/icon.png
+  - package.json
+
+# better-sqlite3 已在本地按 Electron 31 编译好，跳过重复 rebuild，避免打包时联网下载/编译失败
+npmRebuild: false
+
+# better-sqlite3 是原生模块，必须解包到 asar 外面才能加载
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+
+win:
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: 拾念
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+portable:
+  artifactName: ${productName}-Portable-${version}.${ext}

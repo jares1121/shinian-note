@@ -1,0 +1,744 @@
+<script setup>
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import NoteList from './components/NoteList.vue'
+import NoteEditor from './components/NoteEditor.vue'
+import StatsView from './components/StatsView.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
+import DateRangePicker from './components/DateRangePicker.vue'
+import OverlayHost from './components/OverlayHost.vue'
+import Icon from './components/Icon.vue'
+import { confirmDialog, showToast } from './ui'
+import {
+  getThemeMode,
+  getAccent,
+  setThemeMode,
+  setAccent,
+  onSystemThemeChange
+} from './theme'
+
+const notes = ref([])
+const tags = ref([])
+const selectedId = ref(null)
+const keyword = ref('')
+const activeTagId = ref(null)
+const isDark = ref(document.documentElement.classList.contains('dark'))
+const showStats = ref(false)
+const showSettings = ref(false)
+
+// ---- 批量选择 ----
+const selecting = ref(false)
+const selectedIds = ref([])
+const batchTag = ref('')
+
+// ---- 左侧新建标签 ----
+const addingTag = ref(false)
+const newTagName = ref('')
+const tagInputRef = ref(null)
+
+// ---- 自定义时间弹层 ----
+const showRange = ref(false)
+
+// ---- 三栏宽度（可拖动分栏线，记住上次设置）----
+const railWidth = ref(Number(localStorage.getItem('shinian-rail-w')) || 228)
+const listWidth = ref(Number(localStorage.getItem('shinian-list-w')) || 316)
+const dragging = ref(null) // 'rail' | 'list'
+
+function startResize(which, e) {
+  dragging.value = which
+  const startX = e.clientX
+  const startW = which === 'rail' ? railWidth.value : listWidth.value
+  const min = which === 'rail' ? 180 : 240
+  const max = which === 'rail' ? 320 : 460
+
+  const onMove = (ev) => {
+    const w = Math.min(max, Math.max(min, startW + ev.clientX - startX))
+    if (which === 'rail') railWidth.value = w
+    else listWidth.value = w
+  }
+  const onUp = () => {
+    dragging.value = null
+    localStorage.setItem(
+      which === 'rail' ? 'shinian-rail-w' : 'shinian-list-w',
+      String(which === 'rail' ? railWidth.value : listWidth.value)
+    )
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+// ---- 主题 ----
+const themeMode = ref(getThemeMode())
+const accent = ref(getAccent())
+
+function setMode(mode) {
+  themeMode.value = mode
+  isDark.value = setThemeMode(mode)
+}
+
+function toggleTheme() {
+  setMode(isDark.value ? 'light' : 'dark')
+}
+
+function chooseAccent(value) {
+  accent.value = value
+  setAccent(value)
+}
+
+// ---- 时间筛选 ----
+const timeMode = ref('all') // all | today | week | month | custom
+const now0 = new Date()
+const viewYear = ref(now0.getFullYear())
+const viewMonth = ref(now0.getMonth() + 1)
+const customFrom = ref('')
+const customTo = ref('')
+const DAY = 86400000
+
+const timeRange = computed(() => {
+  const t = new Date()
+  const startOfToday = new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime()
+  switch (timeMode.value) {
+    case 'today':
+      return { from: startOfToday, to: startOfToday + DAY }
+    case 'week': {
+      // 周一为一周开始
+      const offset = (t.getDay() + 6) % 7
+      return { from: startOfToday - offset * DAY, to: startOfToday + DAY }
+    }
+    case 'month':
+      return {
+        from: new Date(viewYear.value, viewMonth.value - 1, 1).getTime(),
+        to: new Date(viewYear.value, viewMonth.value, 1).getTime()
+      }
+    case 'custom': {
+      const r = {}
+      if (customFrom.value) {
+        const [y, m, d] = customFrom.value.split('-').map(Number)
+        r.from = new Date(y, m - 1, d).getTime()
+      }
+      if (customTo.value) {
+        const [y, m, d] = customTo.value.split('-').map(Number)
+        r.to = new Date(y, m - 1, d).getTime() + DAY
+      }
+      return r
+    }
+    default:
+      return {}
+  }
+})
+
+const monthValue = computed(
+  () => `${viewYear.value}-${String(viewMonth.value).padStart(2, '0')}`
+)
+
+function shiftMonth(delta) {
+  const t = new Date(viewYear.value, viewMonth.value - 1 + delta, 1)
+  viewYear.value = t.getFullYear()
+  viewMonth.value = t.getMonth() + 1
+  timeMode.value = 'month'
+}
+
+function gotoCurrentMonth() {
+  const t = new Date()
+  viewYear.value = t.getFullYear()
+  viewMonth.value = t.getMonth() + 1
+  timeMode.value = 'month'
+}
+
+function onMonthPick(e) {
+  if (!e.target.value) return
+  const [y, m] = e.target.value.split('-').map(Number)
+  viewYear.value = y
+  viewMonth.value = m
+  timeMode.value = 'month'
+}
+
+// 时间筛选 chip：点「自定义」时打开日历弹层
+function pickTimeMode(mode) {
+  timeMode.value = mode
+  showRange.value = mode === 'custom'
+}
+
+function onRangeApply({ from, to }) {
+  customFrom.value = from
+  customTo.value = to
+  showRange.value = false
+  timeMode.value = from && to ? 'custom' : 'all'
+}
+
+const isCurrentMonth = computed(() => {
+  const t = new Date()
+  return viewYear.value === t.getFullYear() && viewMonth.value === t.getMonth() + 1
+})
+
+const footerText = computed(() =>
+  timeMode.value === 'month'
+    ? `${viewYear.value}年${viewMonth.value}月 · 共 ${notes.value.length} 条`
+    : `共 ${notes.value.length} 条`
+)
+
+const listTitle = computed(() => {
+  const tag = tags.value.find((t) => t.id === activeTagId.value)
+  return tag ? `#${tag.name}` : '全部笔记'
+})
+
+const selectedNote = computed(
+  () => notes.value.find((n) => n.id === selectedId.value) ?? null
+)
+
+async function refresh() {
+  const filter = {
+    keyword: keyword.value.trim(),
+    tagId: activeTagId.value,
+    ...timeRange.value
+  }
+  const [noteRows, tagRows] = await Promise.all([
+    window.api.listNotes(filter),
+    window.api.listTags()
+  ])
+  // 复用已有对象引用，避免每次自动保存刷新都让编辑区重新渲染（会打断输入）
+  const prev = new Map(notes.value.map((n) => [n.id, n]))
+  notes.value = noteRows.map((row) => {
+    const old = prev.get(row.id)
+    if (!old) return row
+    Object.assign(old, row)
+    return old
+  })
+  tags.value = tagRows
+}
+
+// 搜索/标签/时间筛选：200ms 防抖查询
+let searchTimer = null
+// 输入法组词期间先不刷新，等上屏后再查，否则会打断中文输入
+let composing = false
+
+function scheduleRefresh() {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(refresh, 200)
+}
+
+watch([keyword, activeTagId, timeRange], () => {
+  if (composing) return
+  scheduleRefresh()
+})
+
+function onCompositionStart() {
+  composing = true
+}
+
+function onCompositionEnd() {
+  composing = false
+  scheduleRefresh()
+}
+
+async function createNote() {
+  const note = await window.api.createNote('')
+  await refresh()
+  selectedId.value = note.id
+}
+
+function selectNote(id) {
+  selectedId.value = id
+}
+
+function toggleTagFilter(tagId) {
+  activeTagId.value = activeTagId.value === tagId ? null : tagId
+}
+
+// 编辑器自动保存成功后刷新列表（排序/摘要更新）
+async function onSaved() {
+  await refresh()
+}
+
+// 导出全部笔记到文件夹（取消时返回 null，不提示）
+async function onExportAll() {
+  const count = await window.api.exportAllNotes()
+  if (count !== null) showToast(`已导出 ${count} 条笔记`)
+}
+
+async function onBackup() {
+  const ok = await window.api.backupNow()
+  if (ok) showToast('备份完成')
+}
+
+async function onRestore() {
+  const ok = await confirmDialog('恢复会用备份文件覆盖当前全部数据，且无法撤销。确定继续吗？', {
+    title: '恢复备份',
+    okText: '恢复',
+    danger: true
+  })
+  if (!ok) return
+  const done = await window.api.restoreBackup()
+  if (done) {
+    await refresh()
+    selectedId.value = notes.value[0]?.id ?? null
+    showToast('恢复完成')
+  }
+}
+
+async function onDeleted(id) {
+  await refresh()
+  if (selectedId.value === id) {
+    selectedId.value = notes.value[0]?.id ?? null
+  }
+}
+
+// ---- 批量操作 ----
+function toggleSelectMode() {
+  selecting.value = !selecting.value
+  selectedIds.value = []
+  batchTag.value = ''
+}
+
+function toggleNoteSelect(id) {
+  const i = selectedIds.value.indexOf(id)
+  if (i === -1) selectedIds.value.push(id)
+  else selectedIds.value.splice(i, 1)
+}
+
+function selectAllNotes() {
+  selectedIds.value = notes.value.map((n) => n.id)
+}
+
+async function batchDelete() {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) return
+  const ok = await confirmDialog(`确定删除选中的 ${ids.length} 条笔记吗？删除后无法恢复。`, {
+    title: '批量删除',
+    okText: '删除',
+    danger: true
+  })
+  if (!ok) return
+  await window.api.deleteNotes(ids)
+  selecting.value = false
+  selectedIds.value = []
+  await refresh()
+  if (ids.includes(selectedId.value)) selectedId.value = notes.value[0]?.id ?? null
+}
+
+async function batchAddTag() {
+  const name = batchTag.value.trim()
+  const ids = [...selectedIds.value]
+  if (!name || ids.length === 0) return
+  await window.api.addTagsToNotes(ids, [name])
+  batchTag.value = ''
+  await refresh()
+}
+
+// ---- 左侧新建标签 ----
+function startAddTag() {
+  addingTag.value = true
+  nextTick(() => tagInputRef.value?.focus())
+}
+
+function cancelAddTag() {
+  addingTag.value = false
+  newTagName.value = ''
+}
+
+async function commitNewTag() {
+  const name = newTagName.value.trim()
+  addingTag.value = false
+  newTagName.value = ''
+  if (!name) return
+  await window.api.createTag(name)
+  await refresh()
+}
+
+// 删除标签（只删标签本身，笔记保留）
+async function removeTag(tag) {
+  const ok = await confirmDialog(`删除标签「${tag.name}」？\n只删除标签本身，不会删除任何笔记。`, {
+    title: '删除标签',
+    okText: '删除',
+    danger: true
+  })
+  if (!ok) return
+  await window.api.deleteTag(tag.id)
+  if (activeTagId.value === tag.id) activeTagId.value = null
+  await refresh()
+}
+
+// 点击系统提醒通知后跳转：先清筛选保证笔记在列表里，再选中
+async function openNote(id) {
+  keyword.value = ''
+  activeTagId.value = null
+  timeMode.value = 'all'
+  await refresh()
+  selectedId.value = id
+}
+
+let offSystemTheme = null
+onMounted(async () => {
+  await refresh()
+  if (notes.value.length > 0) selectedId.value = notes.value[0].id
+  // 速记窗等其他窗口改了数据，主窗口跟着刷新
+  window.api.onNotesChanged(refresh)
+  window.api.onOpenNote(openNote)
+  // 「跟随系统」时，系统切换深浅色要实时跟随
+  offSystemTheme = onSystemThemeChange((dark) => {
+    isDark.value = dark
+  })
+})
+
+onBeforeUnmount(() => offSystemTheme?.())
+</script>
+
+<template>
+  <div class="h-screen flex bg-surface text-t1 select-none">
+    <!-- ============ 左侧导航 ============ -->
+    <aside
+      class="relative shrink-0 flex flex-col bg-rail border-r border-line px-3 pt-3.5 pb-2.5"
+      :style="{ width: railWidth + 'px' }"
+    >
+      <header class="flex items-center justify-between px-1 pb-3.5">
+        <div class="flex items-center gap-2.5">
+          <div
+            class="w-8 h-8 rounded-[9px] bg-gradient-to-br from-brand to-brand-hover text-white flex items-center justify-center text-[15px] font-bold shadow-sm"
+          >
+            拾
+          </div>
+          <div>
+            <h1 class="text-[15px] font-bold leading-5 tracking-wide">拾念</h1>
+            <p class="text-[11px] leading-4 text-t3">随手一记 · 拾回思绪</p>
+          </div>
+        </div>
+        <button
+          class="w-7 h-7 rounded-md flex items-center justify-center transition"
+          :class="showStats
+            ? 'bg-brand-soft text-brand-text'
+            : 'text-t3 hover:bg-hover hover:text-t1'"
+          title="统计"
+          @click="showStats = !showStats"
+        >
+          <Icon name="chart" cls="w-4 h-4" />
+        </button>
+      </header>
+
+      <button
+        class="w-full h-[38px] rounded-[9px] bg-brand text-white text-[13px] font-semibold flex items-center justify-center gap-1.5 hover:bg-brand-hover active:scale-[0.985] transition shadow-sm"
+        @click="createNote"
+      >
+        <Icon name="plus" cls="w-4 h-4" />
+        新建笔记
+      </button>
+
+      <div class="relative mt-3 mb-4">
+        <Icon
+          name="search"
+          cls="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-t3 pointer-events-none"
+        />
+        <input
+          v-model="keyword"
+          type="text"
+          placeholder="搜索标题和正文…"
+          class="w-full h-[34px] pl-8 pr-8 text-[12.5px] rounded-[9px] border border-line bg-surface text-t1 outline-none placeholder:text-t3 focus:border-brand-line focus:ring-2 focus:ring-brand-line transition select-text"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
+        />
+        <button
+          v-if="keyword"
+          class="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full flex items-center justify-center text-t3 hover:text-t1 hover:bg-hover transition"
+          title="清空搜索"
+          @click="keyword = ''"
+        >
+          <Icon name="x" cls="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div class="relative mb-4">
+        <div class="flex items-center justify-between px-1 pb-2">
+          <span class="text-[11px] font-semibold tracking-wider text-t3">时间</span>
+          <Icon name="calendar" cls="w-3.5 h-3.5 text-t3" />
+        </div>
+        <div class="flex flex-wrap gap-1.5 px-0.5">
+          <button
+            v-for="opt in [
+              { mode: 'all', label: '全部' },
+              { mode: 'today', label: '今天' },
+              { mode: 'week', label: '本周' },
+              { mode: 'custom', label: '自定义' }
+            ]"
+            :key="opt.mode"
+            class="h-6 px-2.5 text-[11.5px] rounded-full transition"
+            :class="timeMode === opt.mode
+              ? 'bg-brand-soft2 text-brand-text font-semibold'
+              : 'bg-chip text-t2 hover:bg-hover'"
+            @click="pickTimeMode(opt.mode)"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+
+        <div class="flex items-center justify-between h-7 mt-2 px-0.5">
+          <button
+            class="w-6 h-6 rounded-md flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
+            title="上月"
+            @click="shiftMonth(-1)"
+          >
+            <Icon name="chevron-left" cls="w-4 h-4" />
+          </button>
+          <input
+            type="month"
+            :value="monthValue"
+            class="bg-transparent text-xs outline-none cursor-pointer tabular-nums dark:[color-scheme:dark]"
+            :class="timeMode === 'month' ? 'text-t2 font-semibold' : 'text-t3'"
+            title="选择月份"
+            @change="onMonthPick"
+          />
+          <button
+            class="w-6 h-6 rounded-md flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
+            title="下月"
+            @click="shiftMonth(1)"
+          >
+            <Icon name="chevron-right" cls="w-4 h-4" />
+          </button>
+        </div>
+
+        <button
+          v-if="timeMode === 'month' && !isCurrentMonth"
+          class="w-full h-6 mt-1 text-[11.5px] rounded-full bg-chip text-t2 hover:bg-hover transition"
+          @click="gotoCurrentMonth"
+        >
+          回到本月
+        </button>
+
+        <button
+          v-if="timeMode === 'custom'"
+          class="w-full h-7 mt-2 px-2 rounded-[7px] bg-chip text-[11.5px] text-t2 flex items-center justify-between gap-1 hover:bg-hover transition"
+          title="修改自定义时间段"
+          @click="showRange = true"
+        >
+          <span class="tabular-nums truncate">
+            {{ customFrom || '开始日期' }} → {{ customTo || '结束日期' }}
+          </span>
+          <Icon name="calendar" cls="w-3.5 h-3.5 text-t3 shrink-0" />
+        </button>
+
+        <DateRangePicker
+          v-if="showRange"
+          :from="customFrom"
+          :to="customTo"
+          @apply="onRangeApply"
+          @close="showRange = false"
+        />
+      </div>
+
+      <div class="mb-2">
+        <div class="flex items-center justify-between px-1 pb-2">
+          <span class="text-[11px] font-semibold tracking-wider text-t3">标签</span>
+          <Icon name="tag" cls="w-3.5 h-3.5 text-t3" />
+        </div>
+        <div class="max-h-[246px] overflow-y-auto pr-0.5">
+          <button
+            class="w-full h-[29px] px-2 rounded-[7px] flex items-center text-xs transition"
+            :class="activeTagId === null
+              ? 'bg-brand-soft2 text-brand-text font-semibold'
+              : 'text-t2 hover:bg-hover'"
+            @click="activeTagId = null"
+          >
+            <span class="text-t3 mr-1.5">#</span>
+            全部标签
+          </button>
+          <div
+            v-for="tag in tags"
+            :key="tag.id"
+            class="group w-full h-[29px] px-2 rounded-[7px] flex items-center text-xs transition cursor-pointer"
+            :class="activeTagId === tag.id
+              ? 'bg-brand-soft2 text-brand-text font-semibold'
+              : 'text-t2 hover:bg-hover'"
+            @click="toggleTagFilter(tag.id)"
+          >
+            <span class="text-t3 mr-1.5">#</span>
+            <span class="truncate">{{ tag.name }}</span>
+            <span class="ml-auto text-[10.5px] text-t3 tabular-nums group-hover:hidden">
+              {{ tag.count }}
+            </span>
+            <button
+              class="hidden group-hover:flex ml-auto w-4 h-4 rounded items-center justify-center text-t3 hover:text-danger hover:bg-[#e5484d]/10 transition shrink-0"
+              title="删除标签（不影响笔记）"
+              @click.stop="removeTag(tag)"
+            >
+              <Icon name="x" cls="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+        <input
+          v-if="addingTag"
+          ref="tagInputRef"
+          v-model="newTagName"
+          type="text"
+          placeholder="标签名，回车创建"
+          class="mt-0.5 w-full h-[29px] px-2 rounded-[7px] bg-surface border border-brand-line text-xs text-t1 outline-none select-text focus:ring-2 focus:ring-brand-line"
+          @keydown.enter.prevent="commitNewTag"
+          @keydown.esc="cancelAddTag"
+          @blur="commitNewTag"
+        />
+        <button
+          v-else
+          class="mt-0.5 w-full h-[29px] px-2 rounded-[7px] flex items-center gap-1.5 text-xs text-t3 hover:bg-hover hover:text-brand-text transition"
+          @click="startAddTag"
+        >
+          <Icon name="plus" cls="w-3.5 h-3.5" />
+          新建标签
+        </button>
+      </div>
+
+      <div class="flex-1"></div>
+
+      <div class="border-t border-line pt-2">
+        <div class="flex items-center justify-between">
+          <span class="px-1 text-[11px] text-t3 truncate">{{ footerText }}</span>
+          <div class="flex items-center gap-0.5">
+            <button
+              class="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
+              :title="isDark ? '切换到浅色' : '切换到深色'"
+              @click="toggleTheme"
+            >
+              <Icon :name="isDark ? 'sun' : 'moon'" cls="w-4 h-4" />
+            </button>
+            <button
+              class="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
+              title="设置"
+              @click="showSettings = true"
+            >
+              <Icon name="settings" cls="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 可拖动的分栏线 -->
+      <div
+        class="absolute inset-y-0 -right-[3px] w-[6px] z-20 cursor-col-resize hover:bg-brand/20 transition-colors"
+        :class="dragging === 'rail' ? 'bg-brand/30' : ''"
+        title="拖动调整宽度"
+        @mousedown.prevent="startResize('rail', $event)"
+      ></div>
+    </aside>
+
+    <!-- ============ 笔记列表 ============ -->
+    <section
+      class="relative shrink-0 flex flex-col bg-list border-r border-line"
+      :style="{ width: listWidth + 'px' }"
+    >
+      <header class="h-14 shrink-0 flex items-center gap-2 px-4 border-b border-line">
+        <h2 class="text-sm font-semibold truncate">
+          {{ selecting ? `已选 ${selectedIds.length} 条` : listTitle }}
+        </h2>
+        <span
+          v-if="!selecting"
+          class="text-[10.5px] font-semibold text-brand-text bg-brand-soft2 px-1.5 py-px rounded-full tabular-nums"
+        >
+          {{ notes.length }}
+        </span>
+        <div v-if="selecting" class="ml-auto flex items-center gap-2.5">
+          <button class="text-[11.5px] text-t2 hover:text-brand-text transition" @click="selectAllNotes">
+            全选
+          </button>
+          <button class="text-[11.5px] text-t2 hover:text-t1 transition" @click="toggleSelectMode">
+            取消
+          </button>
+        </div>
+        <button
+          v-else
+          class="ml-auto text-[11.5px] text-t2 hover:text-brand-text transition"
+          title="批量选择笔记"
+          @click="toggleSelectMode"
+        >
+          多选
+        </button>
+      </header>
+
+      <div
+        v-if="selecting"
+        class="shrink-0 h-12 px-3 flex items-center gap-1.5 border-b border-line bg-brand-soft"
+      >
+        <input
+          v-model="batchTag"
+          type="text"
+          placeholder="给选中笔记加标签"
+          class="flex-1 min-w-0 h-7 px-2 text-xs rounded-md bg-surface border border-brand-line text-t1 outline-none select-text placeholder:text-t3 focus:ring-2 focus:ring-brand-line"
+          @keydown.enter.prevent="batchAddTag"
+        />
+        <button
+          class="h-7 px-2.5 text-[11.5px] font-semibold rounded-md bg-brand text-white hover:bg-brand-hover disabled:opacity-40 disabled:hover:bg-brand transition shrink-0"
+          :disabled="!selectedIds.length || !batchTag.trim()"
+          @click="batchAddTag"
+        >
+          加标签
+        </button>
+        <button
+          class="w-7 h-7 rounded-md flex items-center justify-center text-danger hover:bg-[#e5484d]/10 disabled:opacity-40 transition shrink-0"
+          :disabled="!selectedIds.length"
+          title="删除所选"
+          @click="batchDelete"
+        >
+          <Icon name="trash" cls="w-4 h-4" />
+        </button>
+      </div>
+
+      <NoteList
+        :notes="notes"
+        :selected-id="selectedId"
+        :selecting="selecting"
+        :selected-ids="selectedIds"
+        @select="selectNote"
+        @toggle="toggleNoteSelect"
+      />
+
+      <!-- 可拖动的分栏线 -->
+      <div
+        class="absolute inset-y-0 -right-[3px] w-[6px] z-20 cursor-col-resize hover:bg-brand/20 transition-colors"
+        :class="dragging === 'list' ? 'bg-brand/30' : ''"
+        title="拖动调整宽度"
+        @mousedown.prevent="startResize('list', $event)"
+      ></div>
+    </section>
+
+    <!-- ============ 编辑 / 统计 ============ -->
+    <main class="flex-1 min-w-0 bg-surface">
+      <StatsView v-if="showStats" :is-dark="isDark" @close="showStats = false" />
+      <template v-else>
+        <NoteEditor
+          v-if="selectedNote"
+          :key="selectedNote.id"
+          :note="selectedNote"
+          @saved="onSaved"
+          @deleted="onDeleted"
+        />
+        <div v-else class="h-full flex flex-col items-center justify-center text-t3 gap-3">
+          <div
+            class="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand to-brand-hover text-white flex items-center justify-center text-3xl font-bold shadow-lg select-none"
+          >
+            拾
+          </div>
+          <p class="text-sm text-t2">没有选中的笔记</p>
+          <p class="text-xs">
+            点左侧「新建笔记」开始记录 · 任何窗口下按
+            <kbd class="mx-0.5 px-1.5 py-0.5 rounded bg-chip text-[11px] font-mono text-t2">Ctrl+Shift+N</kbd>
+            唤起速记
+          </p>
+        </div>
+      </template>
+    </main>
+
+    <SettingsDialog
+      v-if="showSettings"
+      :mode="themeMode"
+      :accent="accent"
+      @close="showSettings = false"
+      @set-mode="setMode"
+      @set-accent="chooseAccent"
+      @export-all="onExportAll"
+      @backup="onBackup"
+      @restore="onRestore"
+    />
+
+    <OverlayHost />
+  </div>
+</template>
