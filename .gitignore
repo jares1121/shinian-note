@@ -1,6 +1,20 @@
+# 依赖与构建产物
 node_modules
 out
 dist
 release
+
+# 本地临时文件 / 预览稿
+.tmp
+.screenshots
+.trae-html-share-packages
+
+# 日志与系统文件
 *.log
 .DS_Store
+Thumbs.db
+
+# 本地数据库（正式数据在用户目录，这里防止误提交调试库）
+*.db
+*.db-wal
+*.db-shm
