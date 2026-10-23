@@ -1,7 +1,7 @@
 {
   "name": "shinian-note",
   "productName": "拾念",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "拾念 · 随时记录",
   "author": "shinian",
   "main": "./out/main/index.js",

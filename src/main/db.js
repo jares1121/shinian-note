@@ -54,6 +54,45 @@ export function initDB() {
   if (!cols.includes('reminded')) {
     db.exec('ALTER TABLE notes ADD COLUMN reminded INTEGER NOT NULL DEFAULT 0')
   }
+  if (!cols.includes('remindRepeat')) {
+    // '' 不重复 / 'daily' 每天 / 'workday' 工作日 / 'weekly:1,3,5' 每周指定星期（0=周日）
+    db.exec("ALTER TABLE notes ADD COLUMN remindRepeat TEXT NOT NULL DEFAULT ''")
+  }
+}
+
+// 重复提醒规则是否命中某天（0=周日）
+function matchRepeatDay(day, repeat) {
+  const w = day.getDay()
+  if (repeat === 'daily') return true
+  if (repeat === 'workday') return w >= 1 && w <= 5
+  if (repeat.startsWith('weekly:')) {
+    const days = repeat.slice(7).split(',').map(Number)
+    return days.includes(w)
+  }
+  return false
+}
+
+// 首次触发时间：沿用所选时间点，从"现在"起找最近一个匹配日
+export function firstRepeatTime(pickedMs, repeat, now = Date.now()) {
+  const picked = new Date(pickedMs)
+  const d = new Date(now)
+  d.setHours(picked.getHours(), picked.getMinutes(), picked.getSeconds(), 0)
+  if (d.getTime() <= now) d.setDate(d.getDate() + 1)
+  for (let i = 0; i < 8; i++) {
+    if (matchRepeatDay(d, repeat)) return d.getTime()
+    d.setDate(d.getDate() + 1)
+  }
+  return null
+}
+
+// 触发后顺延到下一次
+export function nextRepeatTime(remindAt, repeat) {
+  const d = new Date(remindAt)
+  for (let i = 0; i < 8; i++) {
+    d.setDate(d.getDate() + 1)
+    if (matchRepeatDay(d, repeat)) return d.getTime()
+  }
+  return null
 }
 
 // 一键备份当前数据库到指定文件（better-sqlite3 在线备份，返回 Promise）
@@ -181,8 +220,12 @@ export const notesRepo = {
     tx()
   },
   // 设置/取消提醒（remindAt 为毫秒时间戳，null 表示取消；重设时重置已提醒标记）
-  setReminder(id, remindAt) {
-    db.prepare('UPDATE notes SET remindAt = ?, reminded = 0 WHERE id = ?').run(remindAt ?? null, id)
+  setReminder(id, remindAt, repeat = '') {
+    db.prepare('UPDATE notes SET remindAt = ?, remindRepeat = ?, reminded = 0 WHERE id = ?').run(
+      remindAt ?? null,
+      remindAt ? repeat ?? '' : '',
+      id
+    )
     return this.get(id)
   },
   // 到点且未提醒的笔记

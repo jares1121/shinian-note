@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   createTag: (name) => ipcRenderer.invoke('tags:create', name),
   deleteTag: (id) => ipcRenderer.invoke('tags:delete', id),
   setNoteTags: (id, names) => ipcRenderer.invoke('notes:setTags', id, names),
-  setNoteReminder: (id, remindAt) => ipcRenderer.invoke('notes:setReminder', id, remindAt),
+  setNoteReminder: (id, remindAt, repeat) => ipcRenderer.invoke('notes:setReminder', id, remindAt, repeat),
   getStats: () => ipcRenderer.invoke('notes:stats'),
   exportNote: (id) => ipcRenderer.invoke('notes:exportOne', id),
   exportAllNotes: () => ipcRenderer.invoke('notes:exportAll'),
@@ -29,5 +29,19 @@ contextBridge.exposeInMainWorld('api', {
     const listener = (_e, id) => callback(id)
     ipcRenderer.on('app:openNote', listener)
     return () => ipcRenderer.removeListener('app:openNote', listener)
-  }
+  },
+
+  // 窗口控制（自绘标题栏用）
+  winMinimize: () => ipcRenderer.invoke('win:minimize'),
+  winToggleMaximize: () => ipcRenderer.invoke('win:toggleMaximize'),
+  winIsMaximized: () => ipcRenderer.invoke('win:isMaximized'),
+  winClose: () => ipcRenderer.invoke('win:close'),
+  winToggleFloat: () => ipcRenderer.invoke('float:toggle'),
+  floatGetConfig: () => ipcRenderer.invoke('float:get-config'),
+  floatSetTop: (v) => ipcRenderer.invoke('float:set-top', v),
+
+  // 自绘拖拽：拖动区域需要抓手光标，原生 app-region 做不到
+  dragStart: () => ipcRenderer.send('win:drag-start'),
+  dragMove: (dx, dy) => ipcRenderer.send('win:drag-move', dx, dy),
+  dragEnd: () => ipcRenderer.send('win:drag-end')
 })

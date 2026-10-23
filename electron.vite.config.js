@@ -14,7 +14,8 @@ export default defineConfig({
         input: {
           index: resolve('src/preload/index.js'),
           quick: resolve('src/preload/quick.js'),
-          reminder: resolve('src/preload/reminder.js')
+          reminder: resolve('src/preload/reminder.js'),
+          float: resolve('src/preload/float.js')
         }
       }
     }
@@ -26,7 +27,8 @@ export default defineConfig({
         input: {
           index: resolve('src/renderer/index.html'),
           quick: resolve('src/renderer/quick.html'),
-          reminder: resolve('src/renderer/reminder.html')
+          reminder: resolve('src/renderer/reminder.html'),
+          float: resolve('src/renderer/float.html')
         }
       }
     }

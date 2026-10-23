@@ -4,9 +4,10 @@ import Icon from './Icon.vue'
 
 defineProps({
   mode: { type: String, default: 'system' },
-  accent: { type: String, default: 'green' }
+  accent: { type: String, default: 'green' },
+  floatTop: { type: Boolean, default: true }
 })
-const emit = defineEmits(['close', 'set-mode', 'set-accent', 'export-all', 'backup', 'restore'])
+const emit = defineEmits(['close', 'set-mode', 'set-accent', 'export-all', 'backup', 'restore', 'set-float-top'])
 
 const modes = [
   { value: 'light', label: '浅色', icon: 'sun' },
@@ -78,6 +79,34 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               ></span>
               {{ a.label }}
             </button>
+          </div>
+        </section>
+
+        <!-- 悬浮窗 -->
+        <section>
+          <p class="mb-2 text-[11px] font-semibold tracking-wider text-t3">悬浮速记窗</p>
+          <div class="rounded-xl border border-line overflow-hidden">
+            <label class="w-full flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-hover transition">
+              <span class="flex-1">
+                <span class="block text-[13px]">始终置顶</span>
+                <span class="block text-[11px] text-t3 mt-0.5">让悬浮窗一直压在其他窗口上面</span>
+              </span>
+              <span
+                class="relative w-9 h-[22px] rounded-full transition shrink-0"
+                :class="floatTop ? 'bg-brand' : 'bg-line2'"
+              >
+                <span
+                  class="absolute top-[2px] left-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition"
+                  :class="floatTop ? 'translate-x-[17px]' : 'translate-x-0'"
+                ></span>
+              </span>
+              <input
+                type="checkbox"
+                class="sr-only"
+                :checked="floatTop"
+                @change="emit('set-float-top', $event.target.checked)"
+              />
+            </label>
           </div>
         </section>
 

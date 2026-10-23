@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, dialog, app } from 'electron'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { notesRepo, tagsRepo, backupDB, restoreDB } from './db.js'
+import { notesRepo, tagsRepo, backupDB, restoreDB, firstRepeatTime } from './db.js'
 
 // 任何数据变更后广播给所有窗口（主窗口 + 速记窗），各窗口自行刷新
 function broadcast() {
@@ -70,9 +70,12 @@ export function registerIpc() {
     broadcast()
   })
 
-  // 设置/取消提醒（remindAt 毫秒时间戳，null 取消）
-  ipcMain.handle('notes:setReminder', (_e, id, remindAt) => {
-    const note = notesRepo.setReminder(id, remindAt)
+  // 设置/取消提醒（remindAt 毫秒时间戳，null 取消；repeat 为空表示不重复）
+  ipcMain.handle('notes:setReminder', (_e, id, remindAt, repeat) => {
+    const rep = remindAt ? repeat || '' : ''
+    // 重复提醒：时间点沿用所选时分秒，日期由规则决定最近一次
+    const at = remindAt && rep ? firstRepeatTime(remindAt, rep) : remindAt
+    const note = notesRepo.setReminder(id, at, rep)
     broadcast()
     return note
   })

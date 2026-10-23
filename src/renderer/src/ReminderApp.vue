@@ -2,9 +2,13 @@
 import { ref, onMounted } from 'vue'
 import { applyTheme } from './theme'
 import Icon from './components/Icon.vue'
+import { startWindowDrag } from './drag'
 
 const items = ref([])
 let audioCtx = null
+
+// 标题栏拖动（自定义实现，方便显示抓手光标）
+function onHeaderDrag(e) { startWindowDrag(window.reminderApi, e) }
 
 // 主窗口切换主题后，提醒窗下次显示时同步
 function syncTheme() {
@@ -14,7 +18,7 @@ function syncTheme() {
 function fmt(ts) {
   const d = new Date(ts)
   const p = (n) => String(n).padStart(2, '0')
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
 // 提示音：Web Audio 合成两声短音，无需音频文件
@@ -65,8 +69,8 @@ onMounted(async () => {
 <template>
   <div class="h-screen flex flex-col bg-surface rounded-xl overflow-hidden border border-brand-line shadow-2xl">
     <div
-      class="px-3.5 py-2.5 bg-gradient-to-r from-brand to-brand-hover text-white flex items-center justify-between select-none"
-      style="-webkit-app-region: drag"
+      class="px-3.5 py-2.5 bg-gradient-to-r from-brand to-brand-hover text-white flex items-center justify-between select-none drag-handle"
+      @pointerdown="onHeaderDrag"
     >
       <span class="flex items-center gap-2 text-[13px] font-semibold">
         <Icon name="bell" cls="w-4 h-4" />
@@ -74,7 +78,6 @@ onMounted(async () => {
       </span>
       <button
         class="w-6 h-6 rounded-md flex items-center justify-center hover:bg-white/20 transition"
-        style="-webkit-app-region: no-drag"
         title="全部关闭（Esc）"
         @click="dismissAll"
       >

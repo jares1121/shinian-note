@@ -5,8 +5,11 @@ import NoteEditor from './components/NoteEditor.vue'
 import StatsView from './components/StatsView.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import DateRangePicker from './components/DateRangePicker.vue'
+import MonthPicker from './components/MonthPicker.vue'
+import ReminderPicker from './components/ReminderPicker.vue'
 import OverlayHost from './components/OverlayHost.vue'
 import Icon from './components/Icon.vue'
+import { startWindowDrag } from './drag'
 import { confirmDialog, showToast } from './ui'
 import {
   getThemeMode,
@@ -25,6 +28,15 @@ const isDark = ref(document.documentElement.classList.contains('dark'))
 const showStats = ref(false)
 const showSettings = ref(false)
 
+// ---- 悬浮窗置顶配置（从主进程读取并同步）----
+const floatTop = ref(true)
+
+// ---- 专注模式 ----
+const focusMode = ref(false)
+
+// ---- 窗口状态（自绘标题栏用）----
+const maximized = ref(false)
+
 // ---- 批量选择 ----
 const selecting = ref(false)
 const selectedIds = ref([])
@@ -37,6 +49,17 @@ const tagInputRef = ref(null)
 
 // ---- 自定义时间弹层 ----
 const showRange = ref(false)
+const showMonthPicker = ref(false)
+
+// 打开自定义范围时关闭月份选择，反之亦然
+function openRange() {
+  showMonthPicker.value = false
+  showRange.value = true
+}
+function openMonthPicker() {
+  showRange.value = false
+  showMonthPicker.value = true
+}
 
 // ---- 三栏宽度（可拖动分栏线，记住上次设置）----
 const railWidth = ref(Number(localStorage.getItem('shinian-rail-w')) || 228)
@@ -158,10 +181,18 @@ function onMonthPick(e) {
   timeMode.value = 'month'
 }
 
-// 时间筛选 chip：点「自定义」时打开日历弹层
+// 时间筛选 chip：点「自定义」时打开日历弹层；点「本月」时重置到当前月
 function pickTimeMode(mode) {
   timeMode.value = mode
-  showRange.value = mode === 'custom'
+  if (mode === 'custom') openRange()
+  else showRange.value = false
+  showMonthPicker.value = false
+  if (mode === 'month') {
+    const t = new Date()
+    viewYear.value = t.getFullYear()
+    viewMonth.value = t.getMonth() + 1
+    openMonthPicker()
+  }
 }
 
 function onRangeApply({ from, to }) {
@@ -321,6 +352,56 @@ async function batchDelete() {
   if (ids.includes(selectedId.value)) selectedId.value = notes.value[0]?.id ?? null
 }
 
+// 列表项悬停删除：不用先打开笔记
+async function removeNote(note) {
+  const ok = await confirmDialog(`确定删除「${note.title || '无标题'}」吗？删除后无法恢复。`, {
+    title: '删除笔记',
+    okText: '删除',
+    danger: true
+  })
+  if (!ok) return
+  await window.api.deleteNotes([note.id])
+  await refresh()
+  if (selectedId.value === note.id) selectedId.value = notes.value[0]?.id ?? null
+  showToast('已删除')
+}
+
+// ---- 列表「⋯」菜单：设置提醒 / 导出 ----
+const p2 = (n) => String(n).padStart(2, '0')
+const listRemind = ref(null) // { note, anchor }
+const remindBase = computed(() => {
+  const t = listRemind.value?.note?.remindAt
+  return t ? new Date(t) : new Date()
+})
+const listRemindDate = computed(() => {
+  const d = remindBase.value
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`
+})
+const listRemindTime = computed(() => {
+  const d = remindBase.value
+  return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`
+})
+
+function onListRemind({ note, rect }) {
+  listRemind.value = { note, anchor: rect }
+}
+
+async function applyListRemind({ date, time, repeat }) {
+  const target = listRemind.value
+  if (!target || !date) return
+  const [y, m, d] = date.split('-').map(Number)
+  const [h, mi, s] = time.split(':').map(Number)
+  const ts = new Date(y, m - 1, d, h, mi, s || 0).getTime()
+  await window.api.setNoteReminder(target.note.id, ts, repeat || '')
+  listRemind.value = null
+  await refresh()
+  showToast('提醒已设置')
+}
+
+async function exportFromList(note) {
+  await window.api.exportNote(note.id)
+}
+
 async function batchAddTag() {
   const name = batchTag.value.trim()
   const ids = [...selectedIds.value]
@@ -373,6 +454,46 @@ async function openNote(id) {
 }
 
 let offSystemTheme = null
+let offMaximize = null
+let offMinimize = null
+
+// 自绘标题栏的窗口控制
+async function onMinimize() { await window.api.winMinimize() }
+async function onMaximize() { maximized.value = await window.api.winToggleMaximize() }
+async function onClose() { await window.api.winClose() }
+
+// 标题栏拖动（自定义实现，方便显示抓手光标）；最大化时交给系统还原逻辑，不拖
+function onHeaderDrag(e) {
+  if (maximized.value) return
+  startWindowDrag(window.api, e)
+}
+// 双击标题栏 = 最大化 / 还原（原生拖动区域的默认行为）
+function onHeaderDblClick(e) {
+  if (e.target.closest('button')) return
+  onMaximize()
+}
+
+// 退出专注模式
+function exitFocus() {
+  focusMode.value = false
+}
+
+// 切换专注模式（极简编辑器）
+function toggleFocusMode() {
+  focusMode.value = !focusMode.value
+}
+
+// 切换悬浮速记窗
+async function onToggleFloat() {
+  await window.api.winToggleFloat()
+}
+
+// 设置面板改悬浮窗置顶
+async function onSetFloatTop(v) {
+  floatTop.value = v
+  await window.api.floatSetTop(v)
+}
+
 onMounted(async () => {
   await refresh()
   if (notes.value.length > 0) selectedId.value = notes.value[0].id
@@ -383,18 +504,101 @@ onMounted(async () => {
   offSystemTheme = onSystemThemeChange((dark) => {
     isDark.value = dark
   })
+
+  // 标题栏：窗口最大化状态同步
+  maximized.value = await window.api.winIsMaximized()
+  offMaximize = () => { maximized.value = true }
+  offMinimize = () => { maximized.value = false }
+  window.addEventListener('maximize', offMaximize)
+  window.addEventListener('unmaximize', offMinimize)
+
+  // 悬浮窗置顶初始状态
+  try {
+    const cfg = await window.api.floatGetConfig()
+    if (cfg && typeof cfg.alwaysOnTop === 'boolean') floatTop.value = cfg.alwaysOnTop
+  } catch {}
+
+  // 专注模式快捷键：Ctrl+Shift+M
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'm' && !e.altKey) {
+      e.preventDefault()
+      toggleFocusMode()
+    }
+    if (e.key === 'Escape' && focusMode.value) {
+      focusMode.value = false
+    }
+  })
 })
 
-onBeforeUnmount(() => offSystemTheme?.())
+onBeforeUnmount(() => {
+  offSystemTheme?.()
+  offMaximize && window.removeEventListener('maximize', offMaximize)
+  offMinimize && window.removeEventListener('unmaximize', offMinimize)
+})
 </script>
 
 <template>
-  <div class="h-screen flex bg-surface text-t1 select-none">
-    <!-- ============ 左侧导航 ============ -->
-    <aside
-      class="relative shrink-0 flex flex-col bg-rail border-r border-line px-3 pt-3.5 pb-2.5"
-      :style="{ width: railWidth + 'px' }"
+  <div class="h-screen flex flex-col bg-surface text-t1 select-none overflow-hidden">
+    <!-- ============ 自绘标题栏（隐藏原生 title bar 后自己画）============ -->
+    <header
+      class="shrink-0 h-10 flex items-center justify-between px-3 border-b border-line bg-surface drag-handle"
+      @pointerdown="onHeaderDrag"
+      @dblclick="onHeaderDblClick"
     >
+      <div class="flex items-center gap-2.5">
+        <div
+          class="w-6 h-6 rounded-md bg-gradient-to-br from-brand to-brand-hover text-white flex items-center justify-center text-[11px] font-bold"
+        >
+          拾
+        </div>
+        <span class="text-[12.5px] font-semibold tracking-wide">拾念</span>
+      </div>
+
+      <div class="flex items-center gap-0.5">
+        <!-- 悬浮窗切换 -->
+        <button
+          class="w-8 h-8 rounded-md flex items-center justify-center text-t2 hover:bg-hover hover:text-t1 transition"
+          title="悬浮速记窗"
+          @click="onToggleFloat"
+        >
+          <Icon name="float" cls="w-3.5 h-3.5" />
+        </button>
+
+        <!-- 最小化 -->
+        <button
+          class="w-10 h-8 rounded-md flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
+          title="最小化"
+          @click="onMinimize"
+        >
+          <Icon name="minimize" cls="w-3 h-3" />
+        </button>
+        <!-- 最大化 / 还原 -->
+        <button
+          class="w-10 h-8 rounded-md flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
+          :title="maximized ? '还原' : '最大化'"
+          @click="onMaximize"
+        >
+          <Icon :name="maximized ? 'restore' : 'maximize'" cls="w-3 h-3" />
+        </button>
+        <!-- 关闭 -->
+        <button
+          class="w-10 h-8 rounded-md flex items-center justify-center text-t3 hover:bg-danger hover:text-white transition"
+          title="关闭"
+          @click="onClose"
+        >
+          <Icon name="x" cls="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </header>
+
+    <!-- ============ 主体三栏 ============ -->
+    <div class="flex-1 min-h-0 flex">
+      <!-- ============ 左侧导航 ============ -->
+      <aside
+        v-show="!focusMode"
+        class="relative shrink-0 flex flex-col bg-rail border-r border-line px-3 pt-3.5 pb-2.5"
+        :style="{ width: railWidth + 'px' }"
+      >
       <header class="flex items-center justify-between px-1 pb-3.5">
         <div class="flex items-center gap-2.5">
           <div
@@ -461,6 +665,7 @@ onBeforeUnmount(() => offSystemTheme?.())
               { mode: 'all', label: '全部' },
               { mode: 'today', label: '今天' },
               { mode: 'week', label: '本周' },
+              { mode: 'month', label: '本月' },
               { mode: 'custom', label: '自定义' }
             ]"
             :key="opt.mode"
@@ -474,38 +679,50 @@ onBeforeUnmount(() => offSystemTheme?.())
           </button>
         </div>
 
-        <div class="flex items-center justify-between h-7 mt-2 px-0.5">
-          <button
-            class="w-6 h-6 rounded-md flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
-            title="上月"
-            @click="shiftMonth(-1)"
-          >
-            <Icon name="chevron-left" cls="w-4 h-4" />
-          </button>
-          <input
-            type="month"
-            :value="monthValue"
-            class="bg-transparent text-xs outline-none cursor-pointer tabular-nums dark:[color-scheme:dark]"
-            :class="timeMode === 'month' ? 'text-t2 font-semibold' : 'text-t3'"
-            title="选择月份"
-            @change="onMonthPick"
-          />
-          <button
-            class="w-6 h-6 rounded-md flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
-            title="下月"
-            @click="shiftMonth(1)"
-          >
-            <Icon name="chevron-right" cls="w-4 h-4" />
-          </button>
-        </div>
+        <!-- 月度选择器：只在「本月」模式下出现 -->
+        <template v-if="timeMode === 'month'">
+          <div class="relative">
+            <div class="flex items-center justify-between h-7 mt-2 px-0.5">
+              <button
+                class="w-6 h-6 rounded-md flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
+                title="上月"
+                @click="shiftMonth(-1)"
+              >
+                <Icon name="chevron-left" cls="w-4 h-4" />
+              </button>
+              <button
+                class="h-6 px-2 rounded-md bg-chip text-[12px] text-t2 font-semibold tabular-nums hover:bg-hover hover:text-t1 transition flex items-center gap-1"
+                title="选择月份"
+                @click.stop="showMonthPicker = !showMonthPicker"
+              >
+                {{ viewYear }}年{{ viewMonth }}月
+                <Icon name="chevron-right" cls="w-2.5 h-2.5 rotate-90 text-t3" />
+              </button>
+              <button
+                class="w-6 h-6 rounded-md flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
+                title="下月"
+                @click="shiftMonth(1)"
+              >
+                <Icon name="chevron-right" cls="w-4 h-4" />
+              </button>
+            </div>
+            <MonthPicker
+              v-if="showMonthPicker"
+              :year="viewYear"
+              :month="viewMonth"
+              @apply="(v) => { viewYear = v.year; viewMonth = v.month; showMonthPicker = false }"
+              @close="showMonthPicker = false"
+            />
+          </div>
 
-        <button
-          v-if="timeMode === 'month' && !isCurrentMonth"
-          class="w-full h-6 mt-1 text-[11.5px] rounded-full bg-chip text-t2 hover:bg-hover transition"
-          @click="gotoCurrentMonth"
-        >
-          回到本月
-        </button>
+          <button
+            v-if="!isCurrentMonth"
+            class="w-full h-6 mt-1 text-[11.5px] rounded-full bg-chip text-t2 hover:bg-hover transition"
+            @click="gotoCurrentMonth"
+          >
+            回到本月
+          </button>
+        </template>
 
         <button
           v-if="timeMode === 'custom'"
@@ -623,6 +840,7 @@ onBeforeUnmount(() => offSystemTheme?.())
 
     <!-- ============ 笔记列表 ============ -->
     <section
+      v-show="!focusMode"
       class="relative shrink-0 flex flex-col bg-list border-r border-line"
       :style="{ width: listWidth + 'px' }"
     >
@@ -689,6 +907,9 @@ onBeforeUnmount(() => offSystemTheme?.())
         :selected-ids="selectedIds"
         @select="selectNote"
         @toggle="toggleNoteSelect"
+        @remove="removeNote"
+        @remind="onListRemind"
+        @export="exportFromList"
       />
 
       <!-- 可拖动的分栏线 -->
@@ -726,17 +947,30 @@ onBeforeUnmount(() => offSystemTheme?.())
         </div>
       </template>
     </main>
+    </div>
 
     <SettingsDialog
       v-if="showSettings"
       :mode="themeMode"
       :accent="accent"
+      :float-top="floatTop"
       @close="showSettings = false"
       @set-mode="setMode"
       @set-accent="chooseAccent"
+      @set-float-top="onSetFloatTop"
       @export-all="onExportAll"
       @backup="onBackup"
       @restore="onRestore"
+    />
+
+    <ReminderPicker
+      v-if="listRemind"
+      :anchor="listRemind.anchor"
+      :date="listRemindDate"
+      :time="listRemindTime"
+      :repeat="listRemind.note.remindRepeat || ''"
+      @apply="applyListRemind"
+      @close="listRemind = null"
     />
 
     <OverlayHost />

@@ -3,6 +3,7 @@ import { ref, computed, onBeforeUnmount, nextTick } from 'vue'
 import { marked } from 'marked'
 import TagEditor from './TagEditor.vue'
 import Icon from './Icon.vue'
+import ReminderPicker from './ReminderPicker.vue'
 import { confirmDialog } from '../ui'
 
 marked.setOptions({ breaks: true, gfm: true })
@@ -18,8 +19,8 @@ const saving = ref(false)
 const lastSavedAt = ref(null)
 const mode = ref('edit') // 'edit' | 'preview'
 const textareaRef = ref(null)
-const remindRef = ref(null)
-const editingRemind = ref(false)
+const showReminderPicker = ref(false)
+const reminderAnchor = ref(null)
 let timer = null
 
 const previewHtml = computed(() => marked.parse(draft.value || ''))
@@ -60,30 +61,55 @@ async function onTagsChange(names) {
   emit('saved')
 }
 
-// datetime-local 需要的格式：YYYY-MM-DDTHH:MM（本地时区）
+// 提醒时间回填格式：YYYY-MM-DDTHH:MM:SS（本地时区）
 const remindInput = computed(() => {
   if (!props.note.remindAt) return ''
   const d = new Date(props.note.remindAt)
   const p = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 })
 
-function startEditRemind() {
-  editingRemind.value = true
-  nextTick(() => remindRef.value?.focus())
+function openReminderPicker(e) {
+  // 直接以被点的按钮为锚点弹出时间面板，不再经过「选择时间」这一步
+  const rect = e.currentTarget.getBoundingClientRect()
+  reminderAnchor.value = { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom }
+  showReminderPicker.value = true
 }
 
-async function onRemindPick(e) {
-  const value = e.target.value
-  if (!value) return
-  await window.api.setNoteReminder(props.note.id, new Date(value).getTime())
-  editingRemind.value = false
+// 弹层底部展示的重复规则文案
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]
+const WEEK_LONG = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+const repeatLabel = computed(() => {
+  const r = props.note.remindRepeat || ''
+  if (r === 'daily') return '每天'
+  if (r === 'workday') return '工作日'
+  if (!r.startsWith('weekly:')) return ''
+  const days = r.slice(7).split(',').map(Number)
+  const sorted = WEEK_ORDER.filter((d) => days.includes(d))
+  if (sorted.length === 7) return '每天'
+  const pos = sorted.map((d) => WEEK_ORDER.indexOf(d))
+  const consecutive = pos.every((v, i) => i === 0 || v === pos[i - 1] + 1)
+  if (consecutive && sorted.length >= 3) {
+    return `${WEEK_LONG[sorted[0]]}至${WEEK_LONG[sorted[sorted.length - 1]]}`
+  }
+  return sorted.map((d) => WEEK_LONG[d]).join('、')
+})
+
+async function onRemindConfirm({ date, time, repeat }) {
+  if (!date) return
+  const [y, m, d] = date.split('-').map(Number)
+  const [h, mi, s] = time.split(':').map(Number)
+  await window.api.setNoteReminder(
+    props.note.id,
+    new Date(y, m - 1, d, h, mi, s || 0).getTime(),
+    repeat || ''
+  )
+  showReminderPicker.value = false
   emit('saved')
 }
 
 async function clearReminder() {
-  await window.api.setNoteReminder(props.note.id, null)
-  editingRemind.value = false
+  await window.api.setNoteReminder(props.note.id, null, '')
   emit('saved')
 }
 
@@ -210,25 +236,26 @@ onBeforeUnmount(flush)
         <TagEditor :tags="note.tags" @change="onTagsChange" />
 
         <div class="ml-auto flex items-center gap-1 shrink-0">
-          <!-- 未设置：虚线圈 -->
+          <!-- 未设置：点一下直接弹时间面板 -->
           <button
-            v-if="!editingRemind && !note.remindAt"
+            v-if="!note.remindAt"
             class="h-7 px-2 rounded-full border border-dashed border-line2 text-t3 text-[11.5px] flex items-center gap-1 hover:text-brand-text hover:border-brand-line hover:bg-brand-soft transition"
-            @click="startEditRemind"
+            @click="openReminderPicker"
           >
             <Icon name="bell" cls="w-3.5 h-3.5" />
             设置提醒
           </button>
 
-          <!-- 已设置：品牌色胶囊 -->
-          <template v-else-if="!editingRemind">
+          <!-- 已设置：品牌色胶囊，点一下直接改 -->
+          <template v-else>
             <button
               class="h-7 px-2.5 rounded-full bg-brand-soft text-brand-text text-[11.5px] flex items-center gap-1 hover:bg-brand-soft2 transition"
-              title="修改提醒时间"
-              @click="startEditRemind"
+              title="修改提醒"
+              @click="openReminderPicker"
             >
               <Icon name="bell" cls="w-3.5 h-3.5" />
               提醒 {{ fmtDate(note.remindAt) }}
+              <span v-if="repeatLabel" class="text-[10.5px] text-brand-text/75">{{ repeatLabel }}</span>
             </button>
             <button
               class="w-6 h-6 rounded-md flex items-center justify-center text-t3 hover:text-danger hover:bg-hover transition"
@@ -239,23 +266,15 @@ onBeforeUnmount(flush)
             </button>
           </template>
 
-          <!-- 编辑时间 -->
-          <template v-else>
-            <input
-              ref="remindRef"
-              type="datetime-local"
-              :value="remindInput"
-              class="h-7 px-2 rounded-md bg-chip text-[11.5px] text-t2 outline-none focus:ring-2 focus:ring-brand-line dark:[color-scheme:dark]"
-              @change="onRemindPick"
-            />
-            <button
-              class="w-6 h-6 rounded-md flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
-              title="取消"
-              @click="editingRemind = false"
-            >
-              <Icon name="x" cls="w-3.5 h-3.5" />
-            </button>
-          </template>
+          <ReminderPicker
+            v-if="showReminderPicker && reminderAnchor"
+            :anchor="reminderAnchor"
+            :date="remindInput.split('T')[0] || ''"
+            :time="remindInput.split('T')[1] || ''"
+            :repeat="note.remindRepeat || ''"
+            @apply="onRemindConfirm"
+            @close="showReminderPicker = false"
+          />
         </div>
       </div>
     </div>

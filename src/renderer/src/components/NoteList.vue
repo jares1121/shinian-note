@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import Icon from './Icon.vue'
 
 const props = defineProps({
@@ -8,7 +8,54 @@ const props = defineProps({
   selecting: { type: Boolean, default: false },
   selectedIds: { type: Array, default: () => [] }
 })
-const emit = defineEmits(['select', 'toggle'])
+const emit = defineEmits(['select', 'toggle', 'remove', 'remind', 'export'])
+
+/* ---------- 悬停「⋯」更多操作菜单 ---------- */
+const MENU_W = 152
+const MENU_H = 104
+const menu = ref(null) // { note, rect, top, left }
+
+function openMenu(note, e) {
+  e.stopPropagation()
+  const r = e.currentTarget.getBoundingClientRect()
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  let left = r.right - MENU_W
+  left = Math.min(Math.max(left, 8), vw - MENU_W - 8)
+  let top = r.bottom + 6
+  if (top + MENU_H > vh - 8) top = Math.max(8, r.top - MENU_H - 6)
+  menu.value = {
+    note,
+    rect: { top: r.top, left: r.left, right: r.right, bottom: r.bottom },
+    top,
+    left
+  }
+}
+function closeMenu() {
+  menu.value = null
+}
+function pick(action) {
+  const item = menu.value
+  menu.value = null
+  if (!item) return
+  if (action === 'remind') emit('remind', { note: item.note, rect: item.rect })
+  else emit(action, item.note)
+}
+function onDocDown(e) {
+  if (!menu.value) return
+  if (e.target.closest?.('[data-note-menu], [data-note-more]')) return
+  closeMenu()
+}
+onMounted(() => {
+  document.addEventListener('mousedown', onDocDown)
+  window.addEventListener('blur', closeMenu)
+  window.addEventListener('scroll', closeMenu, true)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocDown)
+  window.removeEventListener('blur', closeMenu)
+  window.removeEventListener('scroll', closeMenu, true)
+})
 
 function isChecked(id) {
   return props.selectedIds.includes(id)
@@ -74,7 +121,7 @@ function snippet(content) {
       <li
         v-for="note in group.notes"
         :key="note.id"
-        class="mx-0.5 mb-0.5 px-3 py-2.5 rounded-[9px] cursor-pointer transition"
+        class="group relative mx-0.5 mb-0.5 px-3 py-2.5 rounded-[9px] cursor-pointer transition"
         :class="(selecting ? isChecked(note.id) : note.id === selectedId)
           ? 'bg-brand-soft shadow-[inset_3px_0_0_var(--brand)]'
           : 'hover:bg-hover'"
@@ -94,8 +141,11 @@ function snippet(content) {
             <div class="flex items-baseline gap-2">
               <span class="flex-1 text-[13px] font-semibold leading-5 truncate">{{ note.title }}</span>
               <span
-                class="shrink-0 text-[10.5px] tabular-nums"
-                :class="(selecting ? isChecked(note.id) : note.id === selectedId) ? 'text-brand-text' : 'text-t3'"
+                class="shrink-0 text-[10.5px] tabular-nums transition-opacity"
+                :class="[
+                  (selecting ? isChecked(note.id) : note.id === selectedId) ? 'text-brand-text' : 'text-t3',
+                  selecting ? '' : 'group-hover:opacity-0'
+                ]"
               >
                 {{ hhmm(note.updatedAt) }}
               </span>
@@ -121,10 +171,54 @@ function snippet(content) {
             </div>
           </div>
         </div>
+
+        <!-- 悬停时右上角出现「⋯」，点开为更多操作 -->
+        <button
+          v-if="!selecting"
+          data-note-more
+          class="absolute top-1.5 right-1.5 w-6 h-6 rounded-md flex items-center justify-center bg-surface text-t3 hover:text-t1 hover:bg-hover shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition"
+          title="更多操作"
+          @click="openMenu(note, $event)"
+        >
+          <Icon name="more" cls="w-3.5 h-3.5" />
+        </button>
       </li>
     </template>
     <li v-if="notes.length === 0" class="px-4 py-10 text-center text-xs text-t3">
       没有匹配的笔记
     </li>
   </ul>
+
+  <!-- 更多操作菜单：挂到 body，避免被列表滚动容器裁剪 -->
+  <Teleport to="body">
+    <div
+      v-if="menu"
+      data-note-menu
+      class="fixed z-[90] rounded-lg bg-surface border border-line shadow-xl p-1 select-none"
+      :style="{ width: MENU_W + 'px', top: menu.top + 'px', left: menu.left + 'px' }"
+    >
+      <button
+        class="w-full h-7 px-2 rounded-md flex items-center gap-2 text-[12px] text-t2 hover:bg-hover hover:text-t1 transition"
+        @click="pick('remind')"
+      >
+        <Icon name="bell" cls="w-3.5 h-3.5 text-t3" />
+        设置提醒
+      </button>
+      <button
+        class="w-full h-7 px-2 rounded-md flex items-center gap-2 text-[12px] text-t2 hover:bg-hover hover:text-t1 transition"
+        @click="pick('export')"
+      >
+        <Icon name="download" cls="w-3.5 h-3.5 text-t3" />
+        导出为 Markdown
+      </button>
+      <div class="my-1 h-px bg-line"></div>
+      <button
+        class="w-full h-7 px-2 rounded-md flex items-center gap-2 text-[12px] text-danger hover:bg-[#e5484d]/10 transition"
+        @click="pick('remove')"
+      >
+        <Icon name="trash" cls="w-3.5 h-3.5" />
+        删除
+      </button>
+    </div>
+  </Teleport>
 </template>

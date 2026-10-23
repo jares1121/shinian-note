@@ -2,9 +2,13 @@
 import { ref, onMounted } from 'vue'
 import { applyTheme } from './theme'
 import Icon from './components/Icon.vue'
+import { startWindowDrag } from './drag'
 
 const text = ref('')
 const inputRef = ref(null)
+
+// 标题栏拖动（自定义实现，方便显示抓手光标）
+function onHeaderDrag(e) { startWindowDrag(window.quickApi, e) }
 
 // 主窗口切换主题后，速记窗下次显示时同步
 function syncTheme() {
@@ -41,8 +45,8 @@ onMounted(() => {
 <template>
   <div class="h-screen flex flex-col bg-surface rounded-lg overflow-hidden border border-brand-line shadow-xl">
     <div
-      class="px-3 py-2 bg-gradient-to-r from-brand to-brand-hover text-white text-xs flex items-center justify-between select-none"
-      style="-webkit-app-region: drag"
+      class="px-3 py-2 bg-gradient-to-r from-brand to-brand-hover text-white text-xs flex items-center justify-between select-none drag-handle"
+      @pointerdown="onHeaderDrag"
     >
       <span class="flex items-center gap-1.5 font-semibold tracking-wide">
         <Icon name="feather" cls="w-3.5 h-3.5" />

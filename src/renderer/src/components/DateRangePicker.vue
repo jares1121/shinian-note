@@ -172,8 +172,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           取消
         </button>
         <button
-          class="h-6 px-2 text-[11px] rounded-md bg-brand text-white font-semibold hover:bg-brand-hover disabled:opacity-40 transition"
-          :disabled="!start"
+          class="h-6 px-2 text-[11px] rounded-md bg-brand text-white font-semibold hover:bg-brand-hover transition"
           @click="apply"
         >
           确定
