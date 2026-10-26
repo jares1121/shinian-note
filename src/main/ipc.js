@@ -37,9 +37,28 @@ export function registerIpc() {
     broadcast()
   })
 
-  // 批量删除
+  // 批量移入回收站
   ipcMain.handle('notes:deleteMany', (_e, ids) => {
     notesRepo.removeMany(Array.isArray(ids) ? ids : [])
+    broadcast()
+  })
+
+  // 置顶 / 取消置顶
+  ipcMain.handle('notes:set-pin', (_e, id, pinned) => {
+    notesRepo.setPinned(id, !!pinned)
+    broadcast()
+  })
+
+  /* ---------- 回收站 ---------- */
+  ipcMain.handle('notes:listDeleted', () => notesRepo.listDeleted())
+
+  ipcMain.handle('notes:restoreMany', (_e, ids) => {
+    notesRepo.restoreMany(Array.isArray(ids) ? ids : [])
+    broadcast()
+  })
+
+  ipcMain.handle('notes:purgeMany', (_e, ids) => {
+    notesRepo.purgeMany(Array.isArray(ids) ? ids : [])
     broadcast()
   })
 

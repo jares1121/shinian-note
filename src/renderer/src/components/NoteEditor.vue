@@ -151,12 +151,84 @@ function insertAtCursor(text) {
   })
 }
 
-async function remove() {
-  const ok = await confirmDialog('确定删除这条笔记吗？删除后无法恢复。', {
-    title: '删除笔记',
-    okText: '删除',
-    danger: true
+/* ---------- Markdown 快捷插入 ---------- */
+
+// 应用一次编辑并恢复光标选区
+function applyEdit(nextValue, selStart, selEnd) {
+  draft.value = nextValue
+  onInput()
+  nextTick(() => {
+    const el = textareaRef.value
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(selStart, selEnd)
   })
+}
+
+// 用前后标记包裹选区（无选区时插入占位文字并选中它）
+function wrapSel(before, after, placeholder = '') {
+  const el = textareaRef.value
+  if (!el) return
+  const s = el.selectionStart ?? draft.value.length
+  const e = el.selectionEnd ?? s
+  const v = draft.value
+  const sel = v.slice(s, e) || placeholder
+  applyEdit(v.slice(0, s) + before + sel + after + v.slice(e), s + before.length, s + before.length + sel.length)
+}
+
+// 行前缀开关：选区覆盖的每一行加/去前缀（## 、- 、> 等）
+function toggleLinePrefix(prefix) {
+  const el = textareaRef.value
+  if (!el) return
+  const v = draft.value
+  const s = el.selectionStart ?? 0
+  const e = el.selectionEnd ?? s
+  const lineStart = v.lastIndexOf('\n', s - 1) + 1
+  let lineEnd = v.indexOf('\n', e)
+  if (lineEnd === -1) lineEnd = v.length
+  const lines = v.slice(lineStart, lineEnd).split('\n')
+  const all = lines.every((l) => l.startsWith(prefix))
+  const nextBlock = lines.map((l) => (all ? l.slice(prefix.length) : prefix + l)).join('\n')
+  applyEdit(v.slice(0, lineStart) + nextBlock + v.slice(lineEnd), lineStart, lineStart + nextBlock.length)
+}
+
+const TABLE_TEMPLATE = '| 列一 | 列二 | 列三 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n'
+
+// 工具栏配置：label 文字按钮 / icon 图标按钮
+const TOOLBAR = [
+  { title: '加粗 (Ctrl+B)', label: 'B', labelClass: 'font-bold', run: () => wrapSel('**', '**', '加粗文字') },
+  { title: '斜体 (Ctrl+I)', label: 'I', labelClass: 'italic', run: () => wrapSel('*', '*', '文字') },
+  { title: '删除线', label: 'S', labelClass: 'line-through', run: () => wrapSel('~~', '~~', '删除文字') },
+  { title: '标题', label: 'H', labelClass: 'font-semibold', run: () => toggleLinePrefix('## ') },
+  { title: '无序列表', icon: 'list', run: () => toggleLinePrefix('- ') },
+  { title: '引用', icon: 'quote', run: () => toggleLinePrefix('> ') },
+  { title: '代码块', icon: 'code', run: () => wrapSel('\n```\n', '\n```\n', '代码') },
+  { title: '表格', icon: 'table', run: () => insertAtCursor(TABLE_TEMPLATE) },
+  { title: '链接', icon: 'link', run: () => wrapSel('[', '](https://)', '链接文字') }
+]
+
+// 编辑器内 Ctrl+B / Ctrl+I
+function onTextKeydown(e) {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+  const k = e.key.toLowerCase()
+  if (k === 'b') {
+    e.preventDefault()
+    wrapSel('**', '**', '加粗文字')
+  } else if (k === 'i') {
+    e.preventDefault()
+    wrapSel('*', '*', '文字')
+  }
+}
+
+async function remove() {
+  const ok = await confirmDialog(
+    `「${props.note.title || '无标题'}」将移入回收站，30 天内可随时恢复。`,
+    {
+      title: '删除笔记',
+      okText: '移入回收站',
+      danger: true
+    }
+  )
   if (!ok) return
   clearTimeout(timer)
   dirty.value = false
@@ -279,6 +351,22 @@ onBeforeUnmount(flush)
       </div>
     </div>
 
+    <!-- Markdown 工具栏（仅编辑模式） -->
+    <div v-if="mode === 'edit'" class="shrink-0 border-b border-line">
+      <div class="max-w-[632px] mx-auto px-8 py-1 flex items-center gap-0.5">
+        <button
+          v-for="btn in TOOLBAR"
+          :key="btn.title"
+          class="h-7 min-w-7 px-1.5 rounded-md flex items-center justify-center text-t2 hover:bg-hover hover:text-t1 transition"
+          :title="btn.title"
+          @click="btn.run()"
+        >
+          <span v-if="btn.label" class="text-[12.5px] leading-none" :class="btn.labelClass">{{ btn.label }}</span>
+          <Icon v-else :name="btn.icon" cls="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+
     <!-- 编辑区 -->
     <div class="flex-1 min-h-0 overflow-y-auto">
       <textarea
@@ -291,6 +379,7 @@ onBeforeUnmount(flush)
         @input="onInput"
         @blur="flush"
         @paste="onPaste"
+        @keydown="onTextKeydown"
       ></textarea>
       <div
         v-else

@@ -7,6 +7,10 @@ contextBridge.exposeInMainWorld('api', {
   updateNote: (id, content) => ipcRenderer.invoke('notes:update', id, content),
   deleteNote: (id) => ipcRenderer.invoke('notes:delete', id),
   deleteNotes: (ids) => ipcRenderer.invoke('notes:deleteMany', ids),
+  setNotePin: (id, pinned) => ipcRenderer.invoke('notes:set-pin', id, pinned),
+  listDeletedNotes: () => ipcRenderer.invoke('notes:listDeleted'),
+  restoreNotes: (ids) => ipcRenderer.invoke('notes:restoreMany', ids),
+  purgeNotes: (ids) => ipcRenderer.invoke('notes:purgeMany', ids),
   addTagsToNotes: (ids, names) => ipcRenderer.invoke('notes:addTags', ids, names),
   createTag: (name) => ipcRenderer.invoke('tags:create', name),
   deleteTag: (id) => ipcRenderer.invoke('tags:delete', id),
@@ -19,6 +23,27 @@ contextBridge.exposeInMainWorld('api', {
   restoreBackup: () => ipcRenderer.invoke('backup:restore'),
   saveImage: (bytes, mime) => ipcRenderer.invoke('images:save', bytes, mime),
   listTags: () => ipcRenderer.invoke('tags:list'),
+
+  // 通用配置 / 关于 / 检查更新
+  getAppConfig: () => ipcRenderer.invoke('app:get-config'),
+  setAppConfig: (patch) => ipcRenderer.invoke('app:set-config', patch),
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
+  getUpdateInfo: () => ipcRenderer.invoke('app:get-update'),
+  checkForUpdate: () => ipcRenderer.invoke('app:check-update'),
+  downloadUpdate: (info) => ipcRenderer.invoke('app:download-update', info),
+  cancelUpdateDownload: () => ipcRenderer.invoke('app:cancel-update-download'),
+  installUpdate: (path) => ipcRenderer.invoke('app:install-update', path),
+  onUpdateProgress: (callback) => {
+    const listener = (_e, progress) => callback(progress)
+    ipcRenderer.on('app:update-progress', listener)
+    return () => ipcRenderer.removeListener('app:update-progress', listener)
+  },
+  openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+  onUpdateAvailable: (callback) => {
+    const listener = (_e, info) => callback(info)
+    ipcRenderer.on('app:update-available', listener)
+    return () => ipcRenderer.removeListener('app:update-available', listener)
+  },
   onNotesChanged: (callback) => {
     const listener = () => callback()
     ipcRenderer.on('notes:changed', listener)
