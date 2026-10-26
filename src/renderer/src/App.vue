@@ -4,6 +4,9 @@ import NoteList from './components/NoteList.vue'
 import NoteEditor from './components/NoteEditor.vue'
 import StatsView from './components/StatsView.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import TrashDialog from './components/TrashDialog.vue'
+import UpdateDialog from './components/UpdateDialog.vue'
+import ShortcutsDialog from './components/ShortcutsDialog.vue'
 import DateRangePicker from './components/DateRangePicker.vue'
 import MonthPicker from './components/MonthPicker.vue'
 import ReminderPicker from './components/ReminderPicker.vue'
@@ -30,6 +33,33 @@ const showSettings = ref(false)
 
 // ---- 悬浮窗置顶配置（从主进程读取并同步）----
 const floatTop = ref(true)
+
+// ---- 回收站 ----
+const showTrash = ref(false)
+
+// ---- 通用配置（自动备份 / 检查更新）----
+const appConfig = ref({ autoBackup: true, checkUpdate: true })
+
+async function setAppConfig(patch) {
+  appConfig.value = await window.api.setAppConfig(patch)
+}
+
+// 设置面板「检查更新」：有新版弹下载提示，没有就 toast
+// 发现新版本统一走 UpdateDialog（应用内下载 + 自动安装）
+const updateDialog = ref(null)
+const showShortcuts = ref(false)
+function openUpdateDialog(info) {
+  if (info?.version) updateDialog.value = info
+}
+
+async function onManualCheckUpdate() {
+  const info = await window.api.checkForUpdate()
+  if (info?.version) openUpdateDialog(info)
+  else showToast('当前已是最新版本')
+}
+
+// ---- 应用版本（关于面板显示）----
+const appVersion = ref('')
 
 // ---- 专注模式 ----
 const focusMode = ref(false)
@@ -273,6 +303,17 @@ async function createNote() {
   selectedId.value = note.id
 }
 
+// 列表是否有筛选条件（决定空状态显示引导还是「没有匹配」）
+const hasFilter = computed(
+  () => !!(keyword.value.trim() || activeTagId.value || timeRange.value?.from || timeRange.value?.to)
+)
+
+// 置顶 / 取消置顶
+async function togglePin(note) {
+  await window.api.setNotePin(note.id, !note.pinned)
+  await refresh()
+}
+
 function selectNote(id) {
   selectedId.value = id
 }
@@ -339,9 +380,9 @@ function selectAllNotes() {
 async function batchDelete() {
   const ids = [...selectedIds.value]
   if (ids.length === 0) return
-  const ok = await confirmDialog(`确定删除选中的 ${ids.length} 条笔记吗？删除后无法恢复。`, {
+  const ok = await confirmDialog(`选中的 ${ids.length} 条笔记将移入回收站，30 天内可随时恢复。`, {
     title: '批量删除',
-    okText: '删除',
+    okText: '移入回收站',
     danger: true
   })
   if (!ok) return
@@ -350,20 +391,21 @@ async function batchDelete() {
   selectedIds.value = []
   await refresh()
   if (ids.includes(selectedId.value)) selectedId.value = notes.value[0]?.id ?? null
+  showToast(`已移入回收站 ${ids.length} 条`)
 }
 
-// 列表项悬停删除：不用先打开笔记
+// 列表项悬停删除：移入回收站，不用先打开笔记
 async function removeNote(note) {
-  const ok = await confirmDialog(`确定删除「${note.title || '无标题'}」吗？删除后无法恢复。`, {
+  const ok = await confirmDialog(`「${note.title || '无标题'}」将移入回收站，30 天内可随时恢复。`, {
     title: '删除笔记',
-    okText: '删除',
+    okText: '移入回收站',
     danger: true
   })
   if (!ok) return
   await window.api.deleteNotes([note.id])
   await refresh()
   if (selectedId.value === note.id) selectedId.value = notes.value[0]?.id ?? null
-  showToast('已删除')
+  showToast('已移入回收站')
 }
 
 // ---- 列表「⋯」菜单：设置提醒 / 导出 ----
@@ -518,11 +560,37 @@ onMounted(async () => {
     if (cfg && typeof cfg.alwaysOnTop === 'boolean') floatTop.value = cfg.alwaysOnTop
   } catch {}
 
-  // 专注模式快捷键：Ctrl+Shift+M
+  // 通用配置 / 版本号 / 检查更新提示
+  try {
+    appConfig.value = await window.api.getAppConfig()
+    appVersion.value = await window.api.getAppVersion()
+  } catch {}
+  // 主进程启动时发现新版本会推送；这里兜底拉一次（渲染端加载晚于推送的情况）
+  let updateShown = false
+  const showUpdate = (info) => {
+    if (updateShown || !info?.version) return
+    updateShown = true
+    openUpdateDialog(info)
+  }
+  window.api.onUpdateAvailable(showUpdate)
+  try {
+    const info = await window.api.getUpdateInfo()
+    if (info) showUpdate(info)
+  } catch {}
+
+  // 快捷键：Ctrl+Shift+M 专注模式、Ctrl+N 新建笔记、F1 快捷键帮助
   window.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'm' && !e.altKey) {
       e.preventDefault()
       toggleFocusMode()
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+      e.preventDefault()
+      createNote()
+    }
+    if (e.key === 'F1') {
+      e.preventDefault()
+      showShortcuts.value = true
     }
     if (e.key === 'Escape' && focusMode.value) {
       focusMode.value = false
@@ -813,6 +881,13 @@ onBeforeUnmount(() => {
           <div class="flex items-center gap-0.5">
             <button
               class="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
+              title="回收站"
+              @click="showTrash = true"
+            >
+              <Icon name="trash" cls="w-4 h-4" />
+            </button>
+            <button
+              class="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-t3 hover:bg-hover hover:text-t1 transition"
               :title="isDark ? '切换到浅色' : '切换到深色'"
               @click="toggleTheme"
             >
@@ -905,11 +980,14 @@ onBeforeUnmount(() => {
         :selected-id="selectedId"
         :selecting="selecting"
         :selected-ids="selectedIds"
+        :filtered="hasFilter"
         @select="selectNote"
         @toggle="toggleNoteSelect"
         @remove="removeNote"
         @remind="onListRemind"
         @export="exportFromList"
+        @pin="togglePin"
+        @create="createNote"
       />
 
       <!-- 可拖动的分栏线 -->
@@ -954,13 +1032,37 @@ onBeforeUnmount(() => {
       :mode="themeMode"
       :accent="accent"
       :float-top="floatTop"
+      :auto-backup="appConfig.autoBackup"
+      :check-update="appConfig.checkUpdate"
+      :version="appVersion"
       @close="showSettings = false"
       @set-mode="setMode"
       @set-accent="chooseAccent"
       @set-float-top="onSetFloatTop"
+      @set-autobackup="setAppConfig({ autoBackup: $event })"
+      @set-checkupdate="setAppConfig({ checkUpdate: $event })"
+      @check-update="onManualCheckUpdate"
+      @show-shortcuts="showShortcuts = true"
       @export-all="onExportAll"
       @backup="onBackup"
       @restore="onRestore"
+    />
+
+    <TrashDialog
+      v-if="showTrash"
+      @close="showTrash = false"
+      @changed="refresh"
+    />
+
+    <UpdateDialog
+      v-if="updateDialog"
+      :info="updateDialog"
+      @close="updateDialog = null"
+    />
+
+    <ShortcutsDialog
+      v-if="showShortcuts"
+      @close="showShortcuts = false"
     />
 
     <ReminderPicker

@@ -37,7 +37,8 @@ nsis:
   createDesktopShortcut: always
   createStartMenuShortcut: true
   shortcutName: 拾念
-  artifactName: ${productName}-Setup-${version}.${ext}
+  # ASCII 文件名，保证自动更新下载直链在各环境下的稳定性
+  artifactName: shinian-setup-${version}.${ext}
 
 portable:
-  artifactName: ${productName}-Portable-${version}.${ext}
+  artifactName: shinian-portable-${version}.${ext}

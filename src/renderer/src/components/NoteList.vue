@@ -6,13 +6,15 @@ const props = defineProps({
   notes: { type: Array, required: true },
   selectedId: { type: [Number, null], default: null },
   selecting: { type: Boolean, default: false },
-  selectedIds: { type: Array, default: () => [] }
+  selectedIds: { type: Array, default: () => [] },
+  // 是否处于搜索/标签/时间筛选中（决定空状态文案）
+  filtered: { type: Boolean, default: false }
 })
-const emit = defineEmits(['select', 'toggle', 'remove', 'remind', 'export'])
+const emit = defineEmits(['select', 'toggle', 'remove', 'remind', 'export', 'pin', 'create'])
 
 /* ---------- 悬停「⋯」更多操作菜单 ---------- */
 const MENU_W = 152
-const MENU_H = 104
+const MENU_H = 140
 const menu = ref(null) // { note, rect, top, left }
 
 function openMenu(note, e) {
@@ -79,11 +81,16 @@ function dayLabel(d) {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
 }
 
-// 按更新日期分组（notes 已按 updatedAt 倒序）
+// 置顶笔记单独成组排在最前，其余按更新日期分组（notes 已按 pinned+updatedAt 排序）
 const groups = computed(() => {
   const result = []
+  const pinnedNotes = props.notes.filter((n) => n.pinned)
+  if (pinnedNotes.length) {
+    result.push({ key: 'pinned', label: '置顶', notes: pinnedNotes })
+  }
   let current = null
   for (const note of props.notes) {
+    if (note.pinned) continue
     const d = new Date(note.updatedAt)
     const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
     if (!current || current.key !== key) {
@@ -138,14 +145,16 @@ function snippet(content) {
             <Icon v-if="isChecked(note.id)" name="check" cls="w-3 h-3" />
           </span>
           <div class="min-w-0 flex-1">
-            <div class="flex items-baseline gap-2">
+            <div class="flex items-baseline gap-1.5">
+              <Icon
+                v-if="note.pinned"
+                name="pin"
+                cls="w-3 h-3 text-brand-text shrink-0 self-center"
+              />
               <span class="flex-1 text-[13px] font-semibold leading-5 truncate">{{ note.title }}</span>
               <span
                 class="shrink-0 text-[10.5px] tabular-nums transition-opacity"
-                :class="[
-                  (selecting ? isChecked(note.id) : note.id === selectedId) ? 'text-brand-text' : 'text-t3',
-                  selecting ? '' : 'group-hover:opacity-0'
-                ]"
+                :class="(selecting ? isChecked(note.id) : note.id === selectedId) ? 'text-brand-text' : 'text-t3'"
               >
                 {{ hhmm(note.updatedAt) }}
               </span>
@@ -172,11 +181,11 @@ function snippet(content) {
           </div>
         </div>
 
-        <!-- 悬停时右上角出现「⋯」，点开为更多操作 -->
+        <!-- 悬停时右下角出现「⋯」，点开为更多操作（不遮挡右上角时间） -->
         <button
           v-if="!selecting"
           data-note-more
-          class="absolute top-1.5 right-1.5 w-6 h-6 rounded-md flex items-center justify-center bg-surface text-t3 hover:text-t1 hover:bg-hover shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition"
+          class="absolute bottom-1.5 right-1.5 w-6 h-6 rounded-md flex items-center justify-center bg-surface text-t3 hover:text-t1 hover:bg-hover shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition"
           title="更多操作"
           @click="openMenu(note, $event)"
         >
@@ -184,8 +193,21 @@ function snippet(content) {
         </button>
       </li>
     </template>
-    <li v-if="notes.length === 0" class="px-4 py-10 text-center text-xs text-t3">
-      没有匹配的笔记
+    <li v-if="notes.length === 0" class="px-4 py-10 text-center">
+      <template v-if="!filtered">
+        <div class="w-12 h-12 mx-auto rounded-2xl bg-brand-soft2 text-brand-text flex items-center justify-center">
+          <Icon name="feather" cls="w-5 h-5" />
+        </div>
+        <p class="mt-3 text-[13px] font-medium text-t2">记下第一笔</p>
+        <p class="mt-1 text-[11px] text-t3">随手记录想法、待办和灵感</p>
+        <button
+          class="mt-4 h-8 px-4 text-[12.5px] font-semibold rounded-lg text-white bg-brand hover:bg-brand-hover transition"
+          @click="emit('create')"
+        >
+          新建笔记
+        </button>
+      </template>
+      <p v-else class="text-xs text-t3">没有匹配的笔记</p>
     </li>
   </ul>
 
@@ -203,6 +225,13 @@ function snippet(content) {
       >
         <Icon name="bell" cls="w-3.5 h-3.5 text-t3" />
         设置提醒
+      </button>
+      <button
+        class="w-full h-7 px-2 rounded-md flex items-center gap-2 text-[12px] text-t2 hover:bg-hover hover:text-t1 transition"
+        @click="pick('pin')"
+      >
+        <Icon name="pin" cls="w-3.5 h-3.5 text-t3" />
+        {{ menu.note.pinned ? '取消置顶' : '置顶' }}
       </button>
       <button
         class="w-full h-7 px-2 rounded-md flex items-center gap-2 text-[12px] text-t2 hover:bg-hover hover:text-t1 transition"

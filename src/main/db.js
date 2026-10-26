@@ -58,6 +58,25 @@ export function initDB() {
     // '' 不重复 / 'daily' 每天 / 'workday' 工作日 / 'weekly:1,3,5' 每周指定星期（0=周日）
     db.exec("ALTER TABLE notes ADD COLUMN remindRepeat TEXT NOT NULL DEFAULT ''")
   }
+  if (!cols.includes('deletedAt')) {
+    // 回收站：NULL = 正常，非 NULL = 已删除（毫秒时间戳），30 天后自动清除
+    db.exec('ALTER TABLE notes ADD COLUMN deletedAt INTEGER')
+  }
+  if (!cols.includes('pinned')) {
+    // 置顶：0/1，置顶笔记在列表最上方单独成组
+    db.exec('ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+  }
+}
+
+// 回收站保留天数
+export const TRASH_KEEP_DAYS = 30
+
+// 清掉超过保留期的回收站笔记，返回条数（启动时调用）
+export function purgeExpired(keepDays = TRASH_KEEP_DAYS) {
+  const cutoff = Date.now() - keepDays * 86400000
+  return db
+    .prepare('DELETE FROM notes WHERE deletedAt IS NOT NULL AND deletedAt <= ?')
+    .run(cutoff).changes
 }
 
 // 重复提醒规则是否命中某天（0=周日）
@@ -131,7 +150,7 @@ export const notesRepo = {
   list(filter = {}) {
     const { keyword = '', tagId = null, from = null, to = null } = filter
     let sql = 'SELECT n.* FROM notes n'
-    const conds = []
+    const conds = ['n.deletedAt IS NULL'] // 回收站里的不参与所有列表/搜索
     const params = []
     if (tagId) {
       sql += ' JOIN note_tags nt ON nt.noteId = n.id'
@@ -152,7 +171,7 @@ export const notesRepo = {
       params.push(to)
     }
     if (conds.length) sql += ' WHERE ' + conds.join(' AND ')
-    sql += ' ORDER BY n.updatedAt DESC'
+    sql += ' ORDER BY n.pinned DESC, n.updatedAt DESC'
     return attachTags(db.prepare(sql).all(...params))
   },
   get(id) {
@@ -174,11 +193,41 @@ export const notesRepo = {
     )
     return this.get(id)
   },
+  // 删除 = 移入回收站（软删除，30 天内可恢复）
   remove(id) {
-    db.prepare('DELETE FROM notes WHERE id = ?').run(id)
+    db.prepare('UPDATE notes SET deletedAt = ? WHERE id = ?').run(Date.now(), id)
   },
-  // 批量删除（一次事务，避免逐条广播）
+
+  // 置顶 / 取消置顶
+  setPinned(id, pinned) {
+    db.prepare('UPDATE notes SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id)
+  },
+  // 批量移入回收站（一次事务，避免逐条广播）
   removeMany(ids) {
+    const tx = db.transaction((list) => {
+      const stmt = db.prepare('UPDATE notes SET deletedAt = ? WHERE id = ?')
+      for (const id of list) stmt.run(Date.now(), id)
+    })
+    tx(ids)
+  },
+
+  /* ---------- 回收站 ---------- */
+  // 回收站列表（按删除时间倒序）
+  listDeleted() {
+    return attachTags(
+      db.prepare('SELECT * FROM notes WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC').all()
+    )
+  },
+  // 从回收站恢复
+  restoreMany(ids) {
+    const tx = db.transaction((list) => {
+      const stmt = db.prepare('UPDATE notes SET deletedAt = NULL WHERE id = ?')
+      for (const id of list) stmt.run(id)
+    })
+    tx(ids)
+  },
+  // 彻底删除（note_tags 由外键级联清理）
+  purgeMany(ids) {
     const tx = db.transaction((list) => {
       const stmt = db.prepare('DELETE FROM notes WHERE id = ?')
       for (const id of list) stmt.run(id)
@@ -228,29 +277,33 @@ export const notesRepo = {
     )
     return this.get(id)
   },
-  // 到点且未提醒的笔记
+  // 到点且未提醒的笔记（回收站里的不再提醒）
   dueReminders(now) {
     return db
-      .prepare('SELECT * FROM notes WHERE remindAt IS NOT NULL AND reminded = 0 AND remindAt <= ?')
+      .prepare(
+        'SELECT * FROM notes WHERE deletedAt IS NULL AND remindAt IS NOT NULL AND reminded = 0 AND remindAt <= ?'
+      )
       .all(now)
   },
   markReminded(id) {
     db.prepare('UPDATE notes SET reminded = 1 WHERE id = ?').run(id)
   },
-  // 统计页聚合数据（createdAt 毫秒，本地时区按天/月分组）
+  // 统计页聚合数据（createdAt 毫秒，本地时区按天/月分组；不含回收站里的）
   stats() {
+    const del = 'deletedAt IS NULL'
     const dayExpr = "date(createdAt/1000, 'unixepoch', 'localtime')"
     const monthExpr = "strftime('%Y-%m', createdAt/1000, 'unixepoch', 'localtime')"
     return {
-      total: db.prepare('SELECT COUNT(*) AS c FROM notes').get().c,
-      todayCount: db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE ${dayExpr} = date('now', 'localtime')`).get().c,
-      monthCount: db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE ${monthExpr} = strftime('%Y-%m', 'now', 'localtime')`).get().c,
-      totalChars: db.prepare('SELECT COALESCE(SUM(LENGTH(content)), 0) AS c FROM notes').get().c,
-      daily: db.prepare(`SELECT ${dayExpr} AS day, COUNT(*) AS count FROM notes GROUP BY day ORDER BY day`).all(),
-      monthly: db.prepare(`SELECT ${monthExpr} AS month, COUNT(*) AS count FROM notes GROUP BY month ORDER BY month`).all(),
+      total: db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE ${del}`).get().c,
+      todayCount: db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE ${del} AND ${dayExpr} = date('now', 'localtime')`).get().c,
+      monthCount: db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE ${del} AND ${monthExpr} = strftime('%Y-%m', 'now', 'localtime')`).get().c,
+      totalChars: db.prepare(`SELECT COALESCE(SUM(LENGTH(content)), 0) AS c FROM notes WHERE ${del}`).get().c,
+      daily: db.prepare(`SELECT ${dayExpr} AS day, COUNT(*) AS count FROM notes WHERE ${del} GROUP BY day ORDER BY day`).all(),
+      monthly: db.prepare(`SELECT ${monthExpr} AS month, COUNT(*) AS count FROM notes WHERE ${del} GROUP BY month ORDER BY month`).all(),
       tagCounts: db.prepare(
         `SELECT t.name, COUNT(nt.noteId) AS count
          FROM tags t JOIN note_tags nt ON nt.tagId = t.id
+         WHERE EXISTS (SELECT 1 FROM notes n WHERE n.id = nt.noteId AND n.deletedAt IS NULL)
          GROUP BY t.id ORDER BY count DESC, t.name LIMIT 12`
       ).all()
     }
@@ -258,12 +311,15 @@ export const notesRepo = {
 }
 
 export const tagsRepo = {
-  // 所有标签 + 各自笔记数（没有笔记的空标签也保留并显示）
+  // 所有标签 + 各自有效笔记数（回收站里的不计入；空标签也保留并显示）
   list() {
     return db
       .prepare(
-        `SELECT t.id, t.name, COUNT(nt.noteId) AS count
-         FROM tags t LEFT JOIN note_tags nt ON nt.tagId = t.id
+        `SELECT t.id, t.name,
+           (SELECT COUNT(*) FROM note_tags nt
+            JOIN notes n ON n.id = nt.noteId
+            WHERE nt.tagId = t.id AND n.deletedAt IS NULL) AS count
+         FROM tags t
          GROUP BY t.id
          ORDER BY count DESC, t.name`
       )

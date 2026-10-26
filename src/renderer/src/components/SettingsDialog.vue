@@ -5,9 +5,24 @@ import Icon from './Icon.vue'
 defineProps({
   mode: { type: String, default: 'system' },
   accent: { type: String, default: 'green' },
-  floatTop: { type: Boolean, default: true }
+  floatTop: { type: Boolean, default: true },
+  autoBackup: { type: Boolean, default: true },
+  checkUpdate: { type: Boolean, default: true },
+  version: { type: String, default: '' }
 })
-const emit = defineEmits(['close', 'set-mode', 'set-accent', 'export-all', 'backup', 'restore', 'set-float-top'])
+const emit = defineEmits([
+  'close',
+  'set-mode',
+  'set-accent',
+  'export-all',
+  'backup',
+  'restore',
+  'set-float-top',
+  'set-autobackup',
+  'set-checkupdate',
+  'check-update',
+  'show-shortcuts'
+])
 
 const modes = [
   { value: 'light', label: '浅色', icon: 'sun' },
@@ -44,6 +59,68 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
       </header>
 
       <div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+        <!-- 通用 -->
+        <section>
+          <p class="mb-2 text-[11px] font-semibold tracking-wider text-t3">通用</p>
+          <div class="rounded-xl border border-line overflow-hidden">
+            <label class="w-full flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-hover transition">
+              <span class="flex-1">
+                <span class="block text-[13px]">每日自动备份</span>
+                <span class="block text-[11px] text-t3 mt-0.5">每天首次启动备份一次，保留最近 7 份</span>
+              </span>
+              <span
+                class="relative w-9 h-[22px] rounded-full transition shrink-0"
+                :class="autoBackup ? 'bg-brand' : 'bg-line2'"
+              >
+                <span
+                  class="absolute top-[2px] left-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition"
+                  :class="autoBackup ? 'translate-x-[17px]' : 'translate-x-0'"
+                ></span>
+              </span>
+              <input
+                type="checkbox"
+                class="sr-only"
+                :checked="autoBackup"
+                @change="emit('set-autobackup', $event.target.checked)"
+              />
+            </label>
+
+            <button
+              class="w-full h-11 px-3 rounded-xl border border-line flex items-center gap-2.5 hover:bg-hover transition"
+              @click="emit('show-shortcuts')"
+            >
+              <Icon name="enter" cls="w-4 h-4 text-t3 shrink-0" />
+              <span class="flex-1 text-left">
+                <span class="block text-[13px]">快捷键一览</span>
+                <span class="block text-[11px] text-t3 mt-0.5">查看全部快捷键，也可以按 F1</span>
+              </span>
+              <Icon name="chevron-right" cls="w-3.5 h-3.5 text-t3 shrink-0" />
+            </button>
+            <div class="h-px bg-line"></div>
+            <label class="w-full flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-hover transition">
+              <span class="flex-1">
+                <span class="block text-[13px]">启动时检查更新</span>
+                <span class="block text-[11px] text-t3 mt-0.5">仅获取最新版本号；关闭后应用不会联网</span>
+              </span>
+              <span
+                class="relative w-9 h-[22px] rounded-full transition shrink-0"
+                :class="checkUpdate ? 'bg-brand' : 'bg-line2'"
+              >
+                <span
+                  class="absolute top-[2px] left-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition"
+                  :class="checkUpdate ? 'translate-x-[17px]' : 'translate-x-0'"
+                ></span>
+              </span>
+              <input
+                type="checkbox"
+                class="sr-only"
+                :checked="checkUpdate"
+                @change="emit('set-checkupdate', $event.target.checked)"
+              />
+            </label>
+          </div>
+        </section>
+
         <!-- 外观 -->
         <section>
           <p class="mb-2 text-[11px] font-semibold tracking-wider text-t3">外观</p>
@@ -158,10 +235,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <div class="flex items-center gap-3 px-1">
             <div class="w-9 h-9 rounded-[10px] bg-gradient-to-br from-brand to-brand-hover text-white flex items-center justify-center text-base font-bold shadow-sm">拾</div>
             <div class="text-[11.5px] leading-5 text-t3">
-              <p class="text-[13px] text-t1 font-medium">拾念 v0.1</p>
-              <p>数据只保存在本机，不联网、不上传</p>
+              <p class="text-[13px] text-t1 font-medium">拾念{{ version ? ` v${version}` : '' }}</p>
+              <p>数据只保存在本机；除可选的检查更新外不联网</p>
             </div>
           </div>
+          <button
+            class="mt-3 w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-line text-left hover:bg-hover transition"
+            @click="emit('check-update')"
+          >
+            <Icon name="download" cls="w-4 h-4 text-t3" />
+            <span class="flex-1">
+              <span class="block text-[13px]">检查更新</span>
+              <span class="block text-[11px] text-t3 mt-0.5">手动检查是否有新版本</span>
+            </span>
+            <Icon name="chevron-right" cls="w-3.5 h-3.5 text-t3" />
+          </button>
         </section>
       </div>
     </div>

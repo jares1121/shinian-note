@@ -9,12 +9,15 @@ import {
 	Tray,
 	protocol,
 	net,
-	nativeImage
+	nativeImage,
+	shell
 } from 'electron'
 import { basename, join } from 'node:path'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync, createWriteStream } from 'node:fs'
+import { Readable } from 'node:stream'
+import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { initDB, notesRepo, nextRepeatTime } from './db.js'
+import { initDB, notesRepo, nextRepeatTime, backupDB, purgeExpired } from './db.js'
 import { registerIpc } from './ipc.js'
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
@@ -33,6 +36,105 @@ let tray = null
 let isQuitting = false
 
 const iconPath = () => join(import.meta.dirname, '../../assets/icon.png')
+
+/* ---------- 应用配置（通用开关：自动备份 / 检查更新）---------- */
+
+const appConfigPath = () => join(app.getPath('userData'), 'app-config.json')
+
+function loadAppConfig() {
+	try {
+		return { autoBackup: true, checkUpdate: true, ...JSON.parse(readFileSync(appConfigPath(), 'utf8')) }
+	} catch {
+		return { autoBackup: true, checkUpdate: true }
+	}
+}
+
+function saveAppConfig(cfg) {
+	try {
+		writeFileSync(appConfigPath(), JSON.stringify(cfg, null, 2), 'utf8')
+	} catch {}
+}
+
+/* ---------- 每日自动备份 ---------- */
+
+const AUTO_BACKUP_KEEP = 7
+
+// 每天首次启动时备份一次到 backups/auto，滚动保留最近 AUTO_BACKUP_KEEP 份
+async function autoBackupOnce() {
+	if (!loadAppConfig().autoBackup) return
+	const dir = join(app.getPath('userData'), 'backups', 'auto')
+	mkdirSync(dir, { recursive: true })
+	const p = (x) => String(x).padStart(2, '0')
+	const d = new Date()
+	const name = `auto-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}.db`
+	const dest = join(dir, name)
+	if (existsSync(dest)) return // 今天已经备份过
+	await backupDB(dest)
+	const files = readdirSync(dir)
+		.filter((f) => f.startsWith('auto-') && f.endsWith('.db'))
+		.sort()
+	while (files.length > AUTO_BACKUP_KEEP) unlinkSync(join(dir, files.shift()))
+}
+
+/* ---------- 检查更新（Gitee 发行版）---------- */
+
+const RELEASE_API = 'https://gitee.com/api/v5/repos/jares/shinian-note/releases/latest'
+const RELEASE_PAGE = 'https://gitee.com/jares/shinian-note/releases'
+const UPDATE_DIR = () => join(app.getPath('userData'), 'updates')
+let updateInfo = null
+let updateDownload = null // { abort, dest }
+
+// 从发行版附件里挑出 NSIS 安装包（排除便携版）
+function pickInstallerAsset(data) {
+	const exes = (Array.isArray(data?.assets) ? data.assets : []).filter((a) =>
+		/\.exe$/i.test(a?.name || '')
+	)
+	return (
+		exes.find((a) => /setup/i.test(a.name) && !/portable/i.test(a.name)) ||
+		exes.find((a) => !/portable/i.test(a.name)) ||
+		null
+	)
+}
+
+// 'v1.2.0' vs '1.1.0' → >0
+function cmpVersion(a, b) {
+	const pa = String(a).replace(/^v/, '').split('.').map(Number)
+	const pb = String(b).replace(/^v/, '').split('.').map(Number)
+	for (let i = 0; i < 3; i++) {
+		if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0)
+	}
+	return 0
+}
+
+// 请求 Gitee 最新版本并比对；force=true 供设置面板手动检查（绕过开关）
+// 返回 { version, url } 或 null（无更新/失败/开关关闭）
+async function checkUpdate(force = false) {
+	if (!force && !loadAppConfig().checkUpdate) return null
+	try {
+		const res = await net.fetch(RELEASE_API, { signal: AbortSignal.timeout(8000) })
+		if (!res.ok) return null
+		const data = await res.json()
+		const latest = data?.tag_name ?? ''
+		if (cmpVersion(latest, app.getVersion()) > 0) {
+			// 便携版没法自替换安装，只提示去下载页
+			const isPortable = /portable/i.test(app.getPath('exe'))
+			const asset = isPortable ? null : pickInstallerAsset(data)
+			updateInfo = {
+				version: latest.replace(/^v/, ''),
+				url: data.html_url || RELEASE_PAGE,
+				assetUrl: asset?.browser_download_url || null,
+				assetName: asset?.name || '',
+				assetSize: asset?.size || 0
+			}
+			mainWin?.webContents.send('app:update-available', updateInfo)
+			return updateInfo
+		}
+		return null
+	} catch {
+		// 无网络或被防火墙拦截：静默跳过，不打扰使用
+		return null
+	}
+}
 
 /* ---------- 主窗口位置/大小记忆 ---------- */
 
@@ -524,6 +626,86 @@ function registerWindowIpc() {
 		if (floatWin) floatWin.setAlwaysOnTop(!!alwaysOnTop)
 	})
 	ipcMain.handle('float:get-config', () => loadFloatConfig())
+
+	// 通用配置：自动备份 / 检查更新（设置面板开关）
+	ipcMain.handle('app:get-config', () => loadAppConfig())
+	ipcMain.handle('app:set-config', (_e, patch) => {
+		const cfg = { ...loadAppConfig(), ...(patch ?? {}) }
+		saveAppConfig(cfg)
+		return cfg
+	})
+
+	// 关于面板显示版本号
+	ipcMain.handle('app:version', () => app.getVersion())
+
+	// 检查更新的结果（渲染端加载晚于推送时兜底拉取）
+	ipcMain.handle('app:get-update', () => updateInfo)
+
+	// 设置面板手动检查更新（绕过「启动时检查」开关）
+	ipcMain.handle('app:check-update', () => checkUpdate(true))
+
+	// 应用内下载新版本安装包，进度通过 app:update-progress 推送
+	ipcMain.handle('app:download-update', async (_e, info) => {
+		const target = info?.assetUrl ? info : updateInfo
+		if (!target?.assetUrl) return { ok: false, reason: 'no-asset' }
+		if (updateDownload) return { ok: false, reason: 'busy' }
+		mkdirSync(UPDATE_DIR(), { recursive: true })
+		const dest = join(UPDATE_DIR(), target.assetName || `shinian-setup-${target.version}.exe`)
+		const abort = new AbortController()
+		updateDownload = { abort, dest }
+		try {
+			const res = await net.fetch(target.assetUrl, { signal: abort.signal })
+			if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+			const total = Number(res.headers.get('content-length')) || target.assetSize || 0
+			let received = 0
+			let lastSent = 0
+			const fileStream = createWriteStream(dest)
+			Readable.fromWeb(res.body)
+				.on('data', (chunk) => {
+					received += chunk.length
+					const now = Date.now()
+					if (now - lastSent > 250) {
+						lastSent = now
+						mainWin?.webContents.send('app:update-progress', { received, total })
+					}
+				})
+				.on('error', (err) => fileStream.destroy(err))
+				.pipe(fileStream)
+			await new Promise((resolve, reject) => {
+				fileStream.on('error', reject)
+				fileStream.on('finish', resolve)
+			})
+			mainWin?.webContents.send('app:update-progress', { received, total, done: true })
+			return { ok: true, path: dest }
+		} catch (err) {
+			if (abort.signal.aborted) return { ok: false, reason: 'cancelled' }
+			try {
+				if (existsSync(dest)) unlinkSync(dest)
+			} catch {}
+			return { ok: false, reason: String(err?.message || err) }
+		} finally {
+			updateDownload = null
+		}
+	})
+
+	ipcMain.handle('app:cancel-update-download', () => {
+		updateDownload?.abort.abort()
+	})
+
+	// 运行已下载的安装包并退出应用（只允许 updates 目录内的文件）
+	ipcMain.handle('app:install-update', (_e, filePath) => {
+		if (typeof filePath !== 'string' || !filePath.startsWith(UPDATE_DIR())) return false
+		if (!existsSync(filePath)) return false
+		isQuitting = true
+		spawn(filePath, ['/S'], { detached: true, stdio: 'ignore' }).unref()
+		app.quit()
+		return true
+	})
+
+	// 用系统浏览器打开链接（只允许 https，防任意协议跳转）
+	ipcMain.handle('app:open-external', (_e, url) => {
+		if (typeof url === 'string' && url.startsWith('https://')) shell.openExternal(url)
+	})
 }
 
 function registerReminderIpc() {
@@ -578,10 +760,18 @@ if (!app.requestSingleInstanceLock()) {
 		registerWindowDragIpc()
 		registerWindowIpc()
 		registerReminderIpc()
+		// 清掉回收站里超过保留期的笔记
+		const purged = purgeExpired()
+		if (purged > 0) console.log(`[trash] 自动清除 ${purged} 条过期回收笔记`)
 		createMainWindow()
 		createTray()
 		registerShortcut()
 		startReminderLoop()
+		// 每日自动备份 + 检查更新都延迟一点，避免抢启动窗口
+		setTimeout(() => {
+			autoBackupOnce().catch((err) => console.error('[backup] 自动备份失败:', err))
+			checkUpdate()
+		}, 4000)
 
 		app.on('activate', () => {
 			showMainWindow()
