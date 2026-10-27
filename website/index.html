@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>拾念 —— 先记下来，再说 | Windows 本地笔记</title>
+<meta name="description" content="拾念是一款本地优先的 Windows Markdown 笔记应用：三栏编辑器、全局速记、提醒与回收站。登录后可在多台电脑间云同步，数据始终在你手里。免费开源。" />
+<style>
+  :root {
+    --bg: #fafaf7;
+    --bg-soft: #f2f3ee;
+    --ink: #1b1f1c;
+    --ink-2: #4a5049;
+    --ink-3: #8a9089;
+    --line: #e5e7e0;
+    --brand: #07c160;
+    --brand-hover: #06ad56;
+    --brand-deep: #08944e;
+    --brand-soft: #edf9f3;
+    --radius: 14px;
+    --max: 1080px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--brand-soft); color: var(--brand-deep); }
+  a { color: inherit; }
+  img { max-width: 100%; display: block; }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- 导航 ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(250, 250, 247, 0.86);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner {
+    max-width: var(--max); margin: 0 auto; padding: 0 24px;
+    height: 60px; display: flex; align-items: center; gap: 28px;
+  }
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; text-decoration: none; letter-spacing: 0.02em; }
+  .logo-dot {
+    width: 22px; height: 22px; border-radius: 7px;
+    background: var(--brand);
+    display: grid; place-items: center;
+    color: #fff; font-size: 13px; font-weight: 800;
+    box-shadow: 0 2px 8px rgba(7, 193, 96, 0.35);
+  }
+  .nav-links { display: flex; gap: 22px; margin-left: auto; align-items: center; }
+  .nav-links a { text-decoration: none; color: var(--ink-2); font-size: 14px; transition: color 0.15s; }
+  .nav-links a:hover { color: var(--ink); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--brand); color: #fff;
+    font-weight: 600; font-size: 15px;
+    padding: 11px 22px; border-radius: 10px;
+    text-decoration: none; border: none; cursor: pointer;
+    transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
+    box-shadow: 0 2px 10px rgba(7, 193, 96, 0.28);
+  }
+  .btn:hover { background: var(--brand-hover); transform: translateY(-1px); box-shadow: 0 4px 16px rgba(7, 193, 96, 0.36); }
+  .btn:active { transform: translateY(0); }
+  .btn.small { padding: 8px 16px; font-size: 14px; }
+  .btn.ghost {
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--line); box-shadow: none;
+  }
+  .btn.ghost:hover { background: var(--bg-soft); box-shadow: none; }
+  .btn svg { flex-shrink: 0; }
+
+  /* ---------- Hero ---------- */
+  .hero { padding: 76px 0 64px; }
+  .hero-grid { display: grid; grid-template-columns: 1.02fr 1fr; gap: 56px; align-items: center; }
+  .tag-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--brand-soft); color: var(--brand-deep);
+    font-size: 13px; font-weight: 600;
+    padding: 5px 13px; border-radius: 999px;
+    border: 1px solid #d3efdf;
+  }
+  .tag-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brand); }
+  h1 {
+    font-size: clamp(34px, 4.6vw, 52px);
+    line-height: 1.18; letter-spacing: -0.02em;
+    font-weight: 800; margin: 20px 0 18px;
+  }
+  h1 em { font-style: normal; color: var(--brand-deep); }
+  .hero-sub { font-size: 17px; color: var(--ink-2); max-width: 30em; margin-bottom: 30px; }
+  .hero-cta { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .hero-note { margin-top: 14px; font-size: 13px; color: var(--ink-3); }
+  .hero-visual { position: relative; }
+  .hero-visual img {
+    border-radius: var(--radius);
+    border: 1px solid var(--line);
+    box-shadow: 0 18px 50px -18px rgba(27, 31, 28, 0.25);
+  }
+  .hero-kbd {
+    position: absolute; left: -14px; bottom: 26px;
+    background: #fff; border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 14px;
+    font-size: 13px; color: var(--ink-2);
+    box-shadow: 0 10px 28px -10px rgba(27, 31, 28, 0.22);
+    display: flex; align-items: center; gap: 8px;
+  }
+  kbd {
+    font-family: inherit; font-size: 12px; font-weight: 600;
+    background: var(--bg-soft); border: 1px solid var(--line);
+    border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px;
+    color: var(--ink);
+  }
+
+  /* ---------- 信任带 ---------- */
+  .band { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--bg-soft); }
+  .band-inner { display: flex; flex-wrap: wrap; }
+  .band-item {
+    flex: 1 1 220px; padding: 26px 28px;
+    display: flex; flex-direction: column; gap: 3px;
+    border-left: 1px solid var(--line);
+  }
+  .band-item:first-child { border-left: none; }
+  .band-item b { font-size: 15px; }
+  .band-item span { font-size: 13px; color: var(--ink-3); }
+
+  /* ---------- 通用节 ---------- */
+  section { padding: 88px 0; }
+  .sec-label {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.12em;
+    color: var(--brand-deep); text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  h2 { font-size: clamp(26px, 3.2vw, 36px); line-height: 1.28; letter-spacing: -0.01em; font-weight: 800; }
+  .sec-sub { color: var(--ink-2); max-width: 34em; margin-top: 12px; }
+
+  /* ---------- 功能交替 ---------- */
+  .feat { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .feat + .feat { margin-top: 96px; }
+  .feat img { border-radius: var(--radius); border: 1px solid var(--line); box-shadow: 0 14px 40px -16px rgba(27, 31, 28, 0.18); }
+  .feat.flip .feat-visual { order: 2; }
+  .feat h3 { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; margin-bottom: 12px; }
+  .feat p { color: var(--ink-2); }
+  .feat ul { margin: 18px 0 0; list-style: none; display: grid; gap: 9px; }
+  .feat li { display: flex; gap: 10px; font-size: 15px; color: var(--ink-2); }
+  .feat li::before {
+    content: ""; flex-shrink: 0; margin-top: 9px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--brand);
+  }
+
+  /* ---------- 更多功能（编号列表） ---------- */
+  .grid-list { margin-top: 44px; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+  .grid-cell { padding: 26px 26px 30px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .grid-cell .num { font-size: 13px; font-weight: 700; color: var(--brand-deep); font-variant-numeric: tabular-nums; }
+  .grid-cell b { display: block; margin: 8px 0 6px; font-size: 16px; }
+  .grid-cell p { font-size: 14px; color: var(--ink-2); line-height: 1.65; }
+
+  /* ---------- 下载 ---------- */
+  .download { background: var(--ink); color: #f2f4f2; border-radius: 22px; padding: 56px; position: relative; overflow: hidden; }
+  .download::after {
+    content: ""; position: absolute; right: -120px; top: -120px;
+    width: 340px; height: 340px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(7,193,96,0.22), transparent 65%);
+  }
+  .download .sec-label { color: #4ade80; }
+  .download p.dim { color: #9aa39b; margin-top: 12px; max-width: 34em; }
+  .dl-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 34px; position: relative; z-index: 1; }
+  .dl-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius); padding: 24px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .dl-card b { font-size: 17px; }
+  .dl-card span { font-size: 13px; color: #9aa39b; flex: 1; margin-bottom: 16px; }
+  .dl-card .meta { font-size: 12px; color: #6b726b; margin-top: 10px; }
+
+  /* ---------- FAQ ---------- */
+  .faq { max-width: 760px; margin: 0 auto; }
+  details { border-bottom: 1px solid var(--line); }
+  summary {
+    list-style: none; cursor: pointer;
+    display: flex; justify-content: space-between; align-items: center; gap: 16px;
+    padding: 20px 2px; font-weight: 600; font-size: 16px;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; font-size: 20px; font-weight: 400; color: var(--ink-3); transition: transform 0.2s; }
+  details[open] summary::after { transform: rotate(45deg); }
+  details p { padding: 0 2px 20px; color: var(--ink-2); font-size: 15px; max-width: 40em; }
+
+  /* ---------- 收尾 ---------- */
+  .final { text-align: center; }
+  .final h2 { margin-bottom: 14px; }
+  .final p { color: var(--ink-2); margin-bottom: 28px; }
+  footer { border-top: 1px solid var(--line); padding: 30px 0 40px; }
+  .foot-inner { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; justify-content: space-between; font-size: 13px; color: var(--ink-3); }
+  .foot-inner a { color: var(--ink-2); text-decoration: none; }
+  .foot-inner a:hover { color: var(--brand-deep); }
+  .foot-links { display: flex; gap: 18px; }
+
+  /* ---------- 动效（fail-open：JS 注入 .js 后才隐藏，脚本失败内容照常可见） ---------- */
+  .js .reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.55s cubic-bezier(0.22, 0.8, 0.3, 1), transform 0.55s cubic-bezier(0.22, 0.8, 0.3, 1); }
+  .js .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .js .reveal { opacity: 1; transform: none; transition: none; }
+    .btn:hover { transform: none; }
+  }
+
+  /* ---------- 响应式 ---------- */
+  @media (max-width: 900px) {
+    .hero { padding: 52px 0 48px; }
+    .hero-grid, .feat { grid-template-columns: 1fr; gap: 34px; }
+    .feat.flip .feat-visual { order: 0; }
+    .grid-list { grid-template-columns: 1fr 1fr; }
+    .download { padding: 38px 26px; }
+    .dl-cards { grid-template-columns: 1fr; }
+    section { padding: 60px 0; }
+    .nav-links a:not(.btn) { display: none; }
+    .hero-kbd { left: 10px; bottom: 14px; }
+  }
+  @media (max-width: 560px) {
+    .grid-list { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a class="logo" href="#top"><span class="logo-dot">拾</span>拾念</a>
+    <div class="nav-links">
+      <a href="#features">功能</a>
+      <a href="#sync">云同步</a>
+      <a href="#faq">常见问题</a>
+      <a href="https://gitee.com/jares/shinian-note" target="_blank" rel="noopener">Gitee</a>
+      <a class="btn small" href="#download">下载</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ===================== Hero ===================== -->
+<header class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="tag-pill"><span class="dot"></span>v1.2.0 · 云同步版已发布</span>
+      <h1>先记下来，<br /><em>再说。</em></h1>
+      <p class="hero-sub">
+        拾念是一款本地优先的 Windows 笔记应用：打开即写，Markdown 三栏编辑，一个快捷键唤出速记窗。
+        不登录也能完整使用；登录后，笔记在你的多台电脑之间自动同步。
+      </p>
+      <div class="hero-cta">
+        <a class="btn" href="https://gitee.com/jares/shinian-note/releases/latest" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          下载最新版
+        </a>
+        <a class="btn ghost" href="https://gitee.com/jares/shinian-note" target="_blank" rel="noopener">查看源码</a>
+      </div>
+      <p class="hero-note">Windows 10 / 11（64 位） · 免费开源 · 无广告无订阅</p>
+    </div>
+    <div class="hero-visual reveal">
+      <img
+        src="https://gitee.com/jares/shinian-note/raw/master/docs/screenshots/01-main.png"
+        alt="拾念笔记三栏界面：标签栏、笔记列表与 Markdown 编辑器"
+        loading="eager" />
+      <div class="hero-kbd"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>N</kbd> 随时唤出速记</div>
+    </div>
+  </div>
+</header>
+
+<!-- ===================== 信任带 ===================== -->
+<div class="band">
+  <div class="wrap band-inner">
+    <div class="band-item"><b>本地优先</b><span>数据存在你自己的电脑里，离线可用</span></div>
+    <div class="band-item"><b>云同步可选</b><span>登录后多机自动同步，存于你自己的云环境</span></div>
+    <div class="band-item"><b>免费开源</b><span>代码托管在 Gitee，可审计可自建</span></div>
+    <div class="band-item"><b>轻量干净</b><span>无广告、无订阅、无后台驻留骚扰</span></div>
+  </div>
+</div>
+
+<!-- ===================== 功能 ===================== -->
+<section id="features">
+  <div class="wrap">
+    <p class="sec-label">FEATURES</p>
+    <h2>记笔记这件事，<br />快一点，安静一点。</h2>
+
+    <div class="feat" style="margin-top: 64px;">
+      <div class="feat-visual reveal">
+        <img
+          src="https://gitee.com/jares/shinian-note/raw/master/docs/screenshots/04-float.png"
+          alt="拾念悬浮速记窗：贴边可收成小球" loading="lazy" />
+      </div>
+      <div>
+        <h3>灵感不等人，速记窗也不等</h3>
+        <p>无论在做什么，按下快捷键就能记录。悬浮窗平时收成屏幕边缘的一颗小球，鼠标一碰就展开。</p>
+        <ul>
+          <li>全局快捷键 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> 唤出 / 收起</li>
+          <li>悬浮窗贴边自动收成小球，不挡视线</li>
+          <li>写完即存，进主窗口继续整理</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="feat flip">
+      <div class="feat-visual reveal">
+        <img
+          src="https://gitee.com/jares/shinian-note/raw/master/docs/screenshots/01-main.png"
+          alt="两台电脑之间云同步示意" loading="lazy" />
+      </div>
+      <div id="sync">
+        <h3>多台电脑，一份笔记</h3>
+        <p>v1.2.0 带来云同步：邮箱注册登录后，笔记在你的 Windows 设备之间自动合并。改动按时间戳逐条对齐，删过的内容不会"复活"。</p>
+        <ul>
+          <li>不登录：纯本地使用，功能一个不少</li>
+          <li>登录后：编辑、切回窗口、退出软件时自动同步</li>
+          <li>多账号严格隔离；数据存于你自己的云环境</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="grid-list">
+      <div class="grid-cell"><span class="num">01</span><b>Markdown 三栏</b><p>标签栏、列表、编辑器一屏呈现，实时预览，宽度和布局随手可调。</p></div>
+      <div class="grid-cell"><span class="num">02</span><b>标签与筛选</b><p>多标签归类，加上今天 / 本周 / 本月 / 自定义的时间筛选，找笔记不费劲。</p></div>
+      <div class="grid-cell"><span class="num">03</span><b>提醒与重复</b><p>给笔记定个时间，到点弹窗提醒；支持按周期重复。</p></div>
+      <div class="grid-cell"><span class="num">04</span><b>回收站</b><p>删错了不怕，回收站里一键还原；彻底删除也有二次确认。</p></div>
+      <div class="grid-cell"><span class="num">05</span><b>每日自动备份</b><p>每天首次启动自动备份数据库，滚动保留最近 7 份。</p></div>
+      <div class="grid-cell"><span class="num">06</span><b>主题与专注</b><p>明暗主题跟随系统，三种强调色；专注模式隐藏侧栏只留文字。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 下载 ===================== -->
+<section id="download" style="padding-top: 0;">
+  <div class="wrap">
+    <div class="download reveal">
+      <p class="sec-label">DOWNLOAD</p>
+      <h2>下载拾念 v1.2.0</h2>
+      <p class="dim">两种形态任选。安装版支持应用内自动更新，之后新版本一键升级；便携版解压即用，不写注册表。</p>
+      <div class="dl-cards">
+        <div class="dl-card">
+          <b>安装版（推荐）</b>
+          <span>Windows 10 / 11 64 位 · NSIS 安装包 · 支持自动更新</span>
+          <a class="btn" href="https://gitee.com/jares/shinian-note/releases/latest" target="_blank" rel="noopener">下载最新版</a>
+          <div class="meta">在发行版页面选择 Setup 结尾的 .exe 文件</div>
+        </div>
+        <div class="dl-card">
+          <b>便携版</b>
+          <span>免安装 · 可放 U 盘 · 数据随目录携带</span>
+          <a class="btn ghost" style="color:#f2f4f2;border-color:rgba(255,255,255,0.2)" href="https://gitee.com/jares/shinian-note/releases/latest" target="_blank" rel="noopener">下载便携版</a>
+          <div class="meta">在发行版页面选择 portable 结尾的 .exe 文件</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FAQ ===================== -->
+<section id="faq" style="padding-top: 0;">
+  <div class="wrap">
+    <p class="sec-label" style="text-align:center;">FAQ</p>
+    <h2 style="text-align:center; margin-bottom: 40px;">常见问题</h2>
+    <div class="faq">
+      <details>
+        <summary>我的数据存在哪里？</summary>
+        <p>默认只存在你电脑的本地数据库里（userData 目录），不上传任何服务器。登录并开启云同步后，快照会存到你自己的 CloudBase 云环境中，本地仍然保留完整副本。</p>
+      </details>
+      <details>
+        <summary>收费吗？</summary>
+        <p>应用本身完全免费、开源。云同步基于 CloudBase 免费额度，个人笔记场景足够使用；不登录则完全不产生任何云端流量。</p>
+      </details>
+      <details>
+        <summary>断网的时候能用吗？</summary>
+        <p>能。写作、搜索、提醒、备份全部离线可用；联网后改动会自动补同步。软件退出时也会把没传完的改动自动同步上云。</p>
+      </details>
+      <details>
+        <summary>多台电脑同时改同一条笔记会怎样？</summary>
+        <p>按每条笔记的最后修改时间逐条合并，新的覆盖旧的。本地彻底删除的笔记通过墓碑机制同步删除，不会在另一台电脑上"复活"。</p>
+      </details>
+      <details>
+        <summary>支持哪些系统？会有 macOS / Linux 版吗？</summary>
+        <p>目前提供 Windows 10 / 11（64 位）安装版与便携版。项目基于 Electron，理论上可构建其他平台版本，欢迎到 Gitee 提 Issue 或参与贡献。</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 收尾 CTA ===================== -->
+<section class="final" style="padding-top: 0;">
+  <div class="wrap">
+    <h2>把念头捡起来，<br />从下一次记录开始。</h2>
+    <p>免费 · 开源 · 本地优先</p>
+    <a class="btn" href="https://gitee.com/jares/shinian-note/releases/latest" target="_blank" rel="noopener">下载最新版</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>拾念 shinian-note · 本地优先的笔记应用</span>
+    <div class="foot-links">
+      <a href="https://gitee.com/jares/shinian-note" target="_blank" rel="noopener">Gitee 仓库</a>
+      <a href="https://gitee.com/jares/shinian-note/releases" target="_blank" rel="noopener">全部版本</a>
+      <a href="https://gitee.com/jares/shinian-note/issues" target="_blank" rel="noopener">问题反馈</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // fail-open：先给 html 打 .js 标记，脚本正常才启用隐藏式入场动画
+  document.documentElement.classList.add('js')
+  if (!('IntersectionObserver' in window)) {
+    document.querySelectorAll('.reveal').forEach((el) => el.classList.add('in'))
+  } else {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) {
+          e.target.classList.add('in')
+          io.unobserve(e.target)
+        }
+      })
+    }, { threshold: 0.12 })
+    document.querySelectorAll('.reveal').forEach((el) => io.observe(el))
+  }
+</script>
+
+</body>
+</html>
