@@ -24,6 +24,17 @@ contextBridge.exposeInMainWorld('api', {
   saveImage: (bytes, mime) => ipcRenderer.invoke('images:save', bytes, mime),
   listTags: () => ipcRenderer.invoke('tags:list'),
 
+  // 云同步：本地快照 / 合并云端数据
+  syncSnapshot: () => ipcRenderer.invoke('sync:snapshot'),
+  syncApply: (remote) => ipcRenderer.invoke('sync:apply', remote),
+  syncClear: () => ipcRenderer.invoke('sync:clear'),
+
+  // 退出前补同步：主进程通知渲染进程跑一轮，完成后回执
+  onFlushSync: (callback) => {
+    ipcRenderer.on('app:flush-sync', () => callback())
+  },
+  flushSyncDone: () => ipcRenderer.send('sync:flush-done'),
+
   // 通用配置 / 关于 / 检查更新
   getAppConfig: () => ipcRenderer.invoke('app:get-config'),
   setAppConfig: (patch) => ipcRenderer.invoke('app:set-config', patch),

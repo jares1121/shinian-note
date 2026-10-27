@@ -1,7 +1,7 @@
 {
   "name": "shinian-note",
   "productName": "拾念",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "拾念 · 随时记录",
   "author": "shinian",
   "main": "./out/main/index.js",
@@ -16,6 +16,7 @@
     "dist:dir": "npm run build && electron-builder --win --dir"
   },
   "dependencies": {
+    "@cloudbase/js-sdk": "^3.10.3",
     "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {

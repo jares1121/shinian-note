@@ -8,6 +8,7 @@ defineProps({
   floatTop: { type: Boolean, default: true },
   autoBackup: { type: Boolean, default: true },
   checkUpdate: { type: Boolean, default: true },
+  autoSync: { type: Boolean, default: true },
   version: { type: String, default: '' }
 })
 const emit = defineEmits([
@@ -20,6 +21,7 @@ const emit = defineEmits([
   'set-float-top',
   'set-autobackup',
   'set-checkupdate',
+  'set-autosync',
   'check-update',
   'show-shortcuts'
 ])
@@ -82,6 +84,28 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                 class="sr-only"
                 :checked="autoBackup"
                 @change="emit('set-autobackup', $event.target.checked)"
+              />
+            </label>
+            <div class="h-px bg-line"></div>
+            <label class="w-full flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-hover transition">
+              <span class="flex-1">
+                <span class="block text-[13px]">自动同步</span>
+                <span class="block text-[11px] text-t3 mt-0.5">改动后自动上传、启动和切回窗口时自动拉取；关闭后仅在手动点同步时联网</span>
+              </span>
+              <span
+                class="relative w-9 h-[22px] rounded-full transition shrink-0"
+                :class="autoSync ? 'bg-brand' : 'bg-line2'"
+              >
+                <span
+                  class="absolute top-[2px] left-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition"
+                  :class="autoSync ? 'translate-x-[17px]' : 'translate-x-0'"
+                ></span>
+              </span>
+              <input
+                type="checkbox"
+                class="sr-only"
+                :checked="autoSync"
+                @change="emit('set-autosync', $event.target.checked)"
               />
             </label>
 

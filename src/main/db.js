@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import { app } from 'electron'
 import { join } from 'node:path'
 import { copyFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 
 let db
 let dbFile
@@ -66,6 +67,36 @@ export function initDB() {
     // 置顶：0/1，置顶笔记在列表最上方单独成组
     db.exec('ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
   }
+  if (!cols.includes('uid')) {
+    // 同步用的稳定标识：本地 id 是自增整数，多台机器会撞号，云端只认 uid
+    db.exec('ALTER TABLE notes ADD COLUMN uid TEXT')
+  }
+  if (!cols.includes('changedAt')) {
+    // 任意字段变更的时间戳，只用于同步冲突判定
+    // 不能复用 updatedAt：置顶/改标签不该打乱列表的时间排序
+    db.exec('ALTER TABLE notes ADD COLUMN changedAt INTEGER NOT NULL DEFAULT 0')
+  }
+
+  // 给历史数据补 uid / changedAt
+  const legacy = db
+    .prepare("SELECT id, updatedAt FROM notes WHERE uid IS NULL OR uid = '' OR changedAt = 0")
+    .all()
+  if (legacy.length) {
+    const fix = db.prepare('UPDATE notes SET uid = ?, changedAt = ? WHERE id = ?')
+    const tx = db.transaction((rows) => {
+      for (const r of rows) fix.run(randomUUID(), r.changedAt || r.updatedAt, r.id)
+    })
+    tx(legacy)
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_uid ON notes(uid)')
+
+  // 彻底删除的墓碑：告诉其他设备「这条是真删了」，否则下次拉取会被云端复活
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tombstones (
+      uid TEXT PRIMARY KEY,
+      at INTEGER NOT NULL
+    );
+  `)
 }
 
 // 回收站保留天数
@@ -74,9 +105,22 @@ export const TRASH_KEEP_DAYS = 30
 // 清掉超过保留期的回收站笔记，返回条数（启动时调用）
 export function purgeExpired(keepDays = TRASH_KEEP_DAYS) {
   const cutoff = Date.now() - keepDays * 86400000
-  return db
-    .prepare('DELETE FROM notes WHERE deletedAt IS NOT NULL AND deletedAt <= ?')
-    .run(cutoff).changes
+  const rows = db
+    .prepare('SELECT id, uid FROM notes WHERE deletedAt IS NOT NULL AND deletedAt <= ?')
+    .all(cutoff)
+  if (rows.length === 0) return 0
+
+  const now = Date.now()
+  const tx = db.transaction((list) => {
+    const del = db.prepare('DELETE FROM notes WHERE id = ?')
+    const tomb = db.prepare('INSERT OR REPLACE INTO tombstones (uid, at) VALUES (?, ?)')
+    for (const r of list) {
+      if (r.uid) tomb.run(r.uid, now) // 留墓碑，避免云端把已清空的笔记同步回来
+      del.run(r.id)
+    }
+  })
+  tx(rows)
+  return rows.length
 }
 
 // 重复提醒规则是否命中某天（0=周日）
@@ -124,6 +168,20 @@ export function restoreDB(backupFile) {
   db.close()
   copyFileSync(backupFile, dbFile)
   initDB()
+}
+
+// 整体替换某条笔记的标签关联（不触碰 changedAt，同步合并时用）
+function replaceTags(noteId, names) {
+  db.prepare('DELETE FROM note_tags WHERE noteId = ?').run(noteId)
+  const insTag = db.prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)')
+  const getTag = db.prepare('SELECT id FROM tags WHERE name = ?')
+  const insNT = db.prepare('INSERT OR IGNORE INTO note_tags (noteId, tagId) VALUES (?, ?)')
+  for (const raw of names) {
+    const name = String(raw).trim()
+    if (!name) continue
+    insTag.run(name)
+    insNT.run(noteId, getTag.get(name).id)
+  }
 }
 
 // 给一组笔记挂上各自的标签数组
@@ -180,33 +238,39 @@ export const notesRepo = {
   create(content = '') {
     const now = Date.now()
     const info = db
-      .prepare('INSERT INTO notes (title, content, createdAt, updatedAt) VALUES (?, ?, ?, ?)')
-      .run(deriveTitle(content), content, now, now)
+      .prepare(
+        'INSERT INTO notes (uid, title, content, createdAt, updatedAt, changedAt) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(randomUUID(), deriveTitle(content), content, now, now, now)
     return this.get(info.lastInsertRowid)
   },
   update(id, content) {
-    db.prepare('UPDATE notes SET content = ?, title = ?, updatedAt = ? WHERE id = ?').run(
-      content,
-      deriveTitle(content),
-      Date.now(),
-      id
-    )
+    const now = Date.now()
+    db.prepare(
+      'UPDATE notes SET content = ?, title = ?, updatedAt = ?, changedAt = ? WHERE id = ?'
+    ).run(content, deriveTitle(content), now, now, id)
     return this.get(id)
   },
   // 删除 = 移入回收站（软删除，30 天内可恢复）
   remove(id) {
-    db.prepare('UPDATE notes SET deletedAt = ? WHERE id = ?').run(Date.now(), id)
+    const now = Date.now()
+    db.prepare('UPDATE notes SET deletedAt = ?, changedAt = ? WHERE id = ?').run(now, now, id)
   },
 
   // 置顶 / 取消置顶
   setPinned(id, pinned) {
-    db.prepare('UPDATE notes SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id)
+    db.prepare('UPDATE notes SET pinned = ?, changedAt = ? WHERE id = ?').run(
+      pinned ? 1 : 0,
+      Date.now(),
+      id
+    )
   },
   // 批量移入回收站（一次事务，避免逐条广播）
   removeMany(ids) {
+    const now = Date.now()
     const tx = db.transaction((list) => {
-      const stmt = db.prepare('UPDATE notes SET deletedAt = ? WHERE id = ?')
-      for (const id of list) stmt.run(Date.now(), id)
+      const stmt = db.prepare('UPDATE notes SET deletedAt = ?, changedAt = ? WHERE id = ?')
+      for (const id of list) stmt.run(now, now, id)
     })
     tx(ids)
   },
@@ -220,43 +284,52 @@ export const notesRepo = {
   },
   // 从回收站恢复
   restoreMany(ids) {
+    const now = Date.now()
     const tx = db.transaction((list) => {
-      const stmt = db.prepare('UPDATE notes SET deletedAt = NULL WHERE id = ?')
-      for (const id of list) stmt.run(id)
+      const stmt = db.prepare('UPDATE notes SET deletedAt = NULL, changedAt = ? WHERE id = ?')
+      for (const id of list) stmt.run(now, id)
     })
     tx(ids)
   },
-  // 彻底删除（note_tags 由外键级联清理）
+  // 彻底删除（note_tags 由外键级联清理），同时留墓碑防止云端复活
   purgeMany(ids) {
     const tx = db.transaction((list) => {
-      const stmt = db.prepare('DELETE FROM notes WHERE id = ?')
-      for (const id of list) stmt.run(id)
+      const get = db.prepare('SELECT uid FROM notes WHERE id = ?')
+      const del = db.prepare('DELETE FROM notes WHERE id = ?')
+      const tomb = db.prepare('INSERT OR REPLACE INTO tombstones (uid, at) VALUES (?, ?)')
+      for (const id of list) {
+        const row = get.get(id)
+        if (row?.uid) tomb.run(row.uid, Date.now())
+        del.run(id)
+      }
     })
     tx(ids)
+  },
+  // 切换账号时清空本地笔记与墓碑（note_tags 由外键级联清理；标签本身保留）
+  clearAll() {
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM tombstones').run()
+      db.prepare('DELETE FROM notes').run()
+    })
+    tx()
   },
   // 整体替换一条笔记的标签（传标签名数组，自动建标签）
   setTags(noteId, names) {
     const tx = db.transaction(() => {
-      db.prepare('DELETE FROM note_tags WHERE noteId = ?').run(noteId)
-      const insTag = db.prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)')
-      const getTag = db.prepare('SELECT id FROM tags WHERE name = ?')
-      const insNT = db.prepare('INSERT OR IGNORE INTO note_tags (noteId, tagId) VALUES (?, ?)')
-      for (const raw of names) {
-        const name = String(raw).trim()
-        if (!name) continue
-        insTag.run(name)
-        insNT.run(noteId, getTag.get(name).id)
-      }
+      replaceTags(noteId, names)
+      db.prepare('UPDATE notes SET changedAt = ? WHERE id = ?').run(Date.now(), noteId)
     })
     tx()
     return this.get(noteId)
   },
   // 给多条笔记追加标签（保留各自原有标签）
   addTags(noteIds, names) {
+    const now = Date.now()
     const tx = db.transaction(() => {
       const insTag = db.prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)')
       const getTag = db.prepare('SELECT id FROM tags WHERE name = ?')
       const insNT = db.prepare('INSERT OR IGNORE INTO note_tags (noteId, tagId) VALUES (?, ?)')
+      const touch = db.prepare('UPDATE notes SET changedAt = ? WHERE id = ?')
       for (const noteId of noteIds) {
         for (const raw of names) {
           const name = String(raw).trim()
@@ -264,17 +337,16 @@ export const notesRepo = {
           insTag.run(name)
           insNT.run(noteId, getTag.get(name).id)
         }
+        touch.run(now, noteId)
       }
     })
     tx()
   },
   // 设置/取消提醒（remindAt 为毫秒时间戳，null 表示取消；重设时重置已提醒标记）
   setReminder(id, remindAt, repeat = '') {
-    db.prepare('UPDATE notes SET remindAt = ?, remindRepeat = ?, reminded = 0 WHERE id = ?').run(
-      remindAt ?? null,
-      remindAt ? repeat ?? '' : '',
-      id
-    )
+    db.prepare(
+      'UPDATE notes SET remindAt = ?, remindRepeat = ?, reminded = 0, changedAt = ? WHERE id = ?'
+    ).run(remindAt ?? null, remindAt ? repeat ?? '' : '', Date.now(), id)
     return this.get(id)
   },
   // 到点且未提醒的笔记（回收站里的不再提醒）
@@ -307,6 +379,109 @@ export const notesRepo = {
          GROUP BY t.id ORDER BY count DESC, t.name LIMIT 12`
       ).all()
     }
+  },
+  /* ---------- 云同步 ---------- */
+  // 导出全部笔记（含回收站）+ 墓碑，给云端做快照
+  snapshot() {
+    const rows = db.prepare('SELECT * FROM notes ORDER BY id').all()
+    attachTags(rows)
+    const notes = rows.map((r) => ({
+      uid: r.uid,
+      title: r.title,
+      content: r.content,
+      tags: (r.tags || []).map((t) => t.name),
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      changedAt: r.changedAt,
+      deletedAt: r.deletedAt,
+      pinned: r.pinned ? 1 : 0,
+      remindAt: r.remindAt,
+      remindRepeat: r.remindRepeat || ''
+    }))
+    const tombstones = db.prepare('SELECT uid, at FROM tombstones').all()
+    return { notes, tombstones, updatedAt: Date.now() }
+  },
+
+  // 把云端数据合并进本地：逐条比 changedAt，远端更新才覆盖
+  applyRemote(remote) {
+    const result = { inserted: 0, updated: 0, skipped: 0, removed: 0 }
+    if (!remote) return result
+
+    const remoteNotes = Array.isArray(remote.notes) ? remote.notes : []
+    const remoteTomb = Array.isArray(remote.tombstones) ? remote.tombstones : []
+
+    const tx = db.transaction(() => {
+      // 墓碑优先：远端明确说「彻底删了」的，本地也删掉
+      for (const t of remoteTomb) {
+        if (!t?.uid) continue
+        db.prepare('INSERT OR IGNORE INTO tombstones (uid, at) VALUES (?, ?)').run(t.uid, t.at || 0)
+        for (const row of db.prepare('SELECT id FROM notes WHERE uid = ?').all(t.uid)) {
+          db.prepare('DELETE FROM notes WHERE id = ?').run(row.id)
+          result.removed++
+        }
+      }
+
+      const localTomb = new Set(db.prepare('SELECT uid FROM tombstones').all().map((r) => r.uid))
+      const getLocal = db.prepare('SELECT * FROM notes WHERE uid = ?')
+
+      for (const it of remoteNotes) {
+        if (!it?.uid) continue
+        if (localTomb.has(it.uid)) continue // 本地已彻底删除，不再复活
+
+        const local = getLocal.get(it.uid)
+        const remoteChanged = Number(it.changedAt) || Number(it.updatedAt) || 0
+
+        if (!local) {
+          const info = db
+            .prepare(
+              `INSERT INTO notes (uid, title, content, createdAt, updatedAt, changedAt,
+                                  deletedAt, pinned, remindAt, remindRepeat)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .run(
+              it.uid,
+              it.title ?? '',
+              it.content ?? '',
+              Number(it.createdAt) || Date.now(),
+              Number(it.updatedAt) || Date.now(),
+              remoteChanged,
+              it.deletedAt ?? null,
+              it.pinned ? 1 : 0,
+              it.remindAt ?? null,
+              it.remindRepeat ?? ''
+            )
+          replaceTags(info.lastInsertRowid, it.tags || [])
+          result.inserted++
+          continue
+        }
+
+        if (remoteChanged <= (local.changedAt || 0)) {
+          result.skipped++ // 本地更新或一样新，保留本地
+          continue
+        }
+
+        db.prepare(
+          `UPDATE notes SET title = ?, content = ?, createdAt = ?, updatedAt = ?,
+                            changedAt = ?, deletedAt = ?, pinned = ?, remindAt = ?, remindRepeat = ?
+           WHERE id = ?`
+        ).run(
+          it.title ?? '',
+          it.content ?? '',
+          Number(it.createdAt) || local.createdAt,
+          Number(it.updatedAt) || local.updatedAt,
+          remoteChanged,
+          it.deletedAt ?? null,
+          it.pinned ? 1 : 0,
+          it.remindAt ?? null,
+          it.remindRepeat ?? '',
+          local.id
+        )
+        replaceTags(local.id, it.tags || [])
+        result.updated++
+      }
+    })
+    tx()
+    return result
   }
 }
 

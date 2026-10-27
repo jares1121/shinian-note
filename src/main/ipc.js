@@ -17,6 +17,23 @@ function safeName(s) {
 }
 
 export function registerIpc() {
+  /* ---------- 云同步 ---------- */
+  // 本地快照（全部笔记 + 墓碑），由渲染层上传给云函数
+  ipcMain.handle('sync:snapshot', () => notesRepo.snapshot())
+
+  // 把云端数据合并进本地；有实际变化时通知各窗口刷新
+  ipcMain.handle('sync:apply', (_e, remote) => {
+    const result = notesRepo.applyRemote(remote)
+    if (result.inserted || result.updated || result.removed) broadcast()
+    return result
+  })
+
+  // 切换账号时清空本地数据（避免 A 的笔记被推到 B 的云端）
+  ipcMain.handle('sync:clear', () => {
+    notesRepo.clearAll()
+    broadcast()
+  })
+
   // filter: { keyword?, tagId? }，支持搜索 + 标签筛选
   ipcMain.handle('notes:list', (_e, filter) => notesRepo.list(filter ?? {}))
 

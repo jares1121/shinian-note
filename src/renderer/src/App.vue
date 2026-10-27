@@ -12,8 +12,11 @@ import MonthPicker from './components/MonthPicker.vue'
 import ReminderPicker from './components/ReminderPicker.vue'
 import OverlayHost from './components/OverlayHost.vue'
 import Icon from './components/Icon.vue'
+import LoginDialog from './components/LoginDialog.vue'
 import { startWindowDrag } from './drag'
 import { confirmDialog, showToast } from './ui'
+import { hasLogin, signOut, callFunction, getCurrentUser } from './cloud'
+import { syncNow, schedulePush, cancelPendingPush, clearCachedFileId, flushSync, getLastSyncAt } from './sync'
 import {
   getThemeMode,
   getAccent,
@@ -38,16 +41,42 @@ const floatTop = ref(true)
 const showTrash = ref(false)
 
 // ---- 通用配置（自动备份 / 检查更新）----
-const appConfig = ref({ autoBackup: true, checkUpdate: true })
+const appConfig = ref({ autoBackup: true, checkUpdate: true, autoSync: true })
 
 async function setAppConfig(patch) {
   appConfig.value = await window.api.setAppConfig(patch)
+  // 关掉自动同步时，丢掉还排着队的上传
+  if (patch.autoSync === false) cancelPendingPush()
 }
 
 // 设置面板「检查更新」：有新版弹下载提示，没有就 toast
 // 发现新版本统一走 UpdateDialog（应用内下载 + 自动安装）
 const updateDialog = ref(null)
 const showShortcuts = ref(false)
+
+// ---- 云同步登录态 ----
+const showLogin = ref(false)
+const cloudUser = ref(null) // { username, sub(openid), ... }
+const syncing = ref(false)
+// 同步状态角标：idle / syncing / ok / fail
+const syncState = ref({ status: 'idle', at: 0, message: '' })
+
+const syncText = computed(() => {
+  const s = syncState.value
+  if (s.status === 'syncing') return '同步中…'
+  if (s.status === 'fail') return '同步失败'
+  const at = s.at || getLastSyncAt()
+  if (!at) return '尚未同步'
+  const d = new Date(at)
+  return `已同步 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+})
+
+const syncDotClass = computed(() => {
+  const s = syncState.value.status
+  if (s === 'syncing') return 'bg-brand animate-pulse'
+  if (s === 'fail') return 'bg-danger'
+  return 'bg-brand'
+})
 function openUpdateDialog(info) {
   if (info?.version) updateDialog.value = info
 }
@@ -56,6 +85,105 @@ async function onManualCheckUpdate() {
   const info = await window.api.checkForUpdate()
   if (info?.version) openUpdateDialog(info)
   else showToast('当前已是最新版本')
+}
+
+// ---- 云同步登录 ----
+const LAST_SYNC_UID_KEY = 'shinian.sync.lastUid'
+function getLastSyncUid() { try { return localStorage.getItem(LAST_SYNC_UID_KEY) || '' } catch { return '' } }
+function setLastSyncUid(uid) { try { localStorage.setItem(LAST_SYNC_UID_KEY, uid || '') } catch {} }
+
+function checkCloudLogin() {
+  const state = hasLogin()
+  cloudUser.value = state?.user ?? null
+}
+
+function openLogin() {
+  showLogin.value = true
+}
+
+async function handleLoginSuccess(user) {
+  cloudUser.value = user ?? getCurrentUser()
+  showToast('登录成功')
+  const newUid = await resolveCloudUid()
+  const oldUid = getLastSyncUid()
+  // 账号变了：先清空本地所有笔记/墓碑，避免把旧用户数据合并进新用户
+  const switched = !!newUid && !!oldUid && newUid !== oldUid
+  if (switched) {
+    await window.api.syncClear()
+    clearCachedFileId()
+    selectedId.value = null
+    await refresh()
+  }
+  if (newUid) setLastSyncUid(newUid)
+  if (switched) showToast('已切换账号，本地数据已清空')
+  // 登录/切换后同步：不静默，拉取失败要能看见原因
+  await runSync(false)
+  if (switched) {
+    await refresh()
+    if (!selectedId.value && notes.value.length) selectedId.value = notes.value[0].id
+  }
+}
+
+// 云函数从 JWT 里解出的 uid 才是同步用的账号标识（客户端 user 字段各版本叫法不一）
+async function resolveCloudUid() {
+  const res = await callFunction('test')
+  if (res.ok && res.data?.uid) return String(res.data.uid)
+  const u = cloudUser.value
+  return String(u?.uid || u?.sub || '')
+}
+
+// 手动/自动同步。silent=true 时不打扰用户（仅在失败或无变化时静默）
+async function runSync(silent = false) {
+  if (syncing.value) return
+  syncing.value = true
+  syncState.value = { ...syncState.value, status: 'syncing' }
+  try {
+    const res = await syncNow()
+    if (!res.ok) {
+      syncState.value = { status: 'fail', at: Date.now(), message: res.message || '同步失败' }
+      if (!silent) showToast(res.message || '同步失败')
+      return
+    }
+    syncState.value = { status: 'ok', at: Date.now(), message: '' }
+    const { inserted = 0, updated = 0, removed = 0 } = res.applied || {}
+    if (!silent) {
+      const changed = inserted + updated + removed
+      if (res.empty) showToast('该账号云端还没有数据')
+      else showToast(changed ? `已同步，${changed} 条笔记有更新` : '已是最新')
+    }
+  } catch (e) {
+    syncState.value = { status: 'fail', at: Date.now(), message: '同步失败' }
+    if (!silent) showToast('同步失败')
+  } finally {
+    syncing.value = false
+  }
+}
+
+// 主进程退出前通知：把没传完的改动立刻同步一轮，完成后回执放行退出
+async function handleFlushSync() {
+  try {
+    if (cloudUser.value && appConfig.value.autoSync) await flushSync()
+  } catch {
+    /* 异常也放行退出，数据在本地不丢 */
+  }
+  window.api.flushSyncDone()
+}
+
+async function handleLogout() {
+  const ok = await confirmDialog('确定退出登录吗？\n本地数据不会被删除。', {
+    title: '退出登录',
+    okText: '退出',
+    danger: true
+  })
+  if (!ok) return
+  const res = await signOut()
+  if (res.ok) {
+    cloudUser.value = null
+    syncState.value = { status: 'idle', at: 0, message: '' }
+    showToast('已退出登录')
+  } else {
+    showToast(res.message || '退出失败')
+  }
 }
 
 // ---- 应用版本（关于面板显示）----
@@ -498,6 +626,7 @@ async function openNote(id) {
 let offSystemTheme = null
 let offMaximize = null
 let offMinimize = null
+let offFocusSync = null
 
 // 自绘标题栏的窗口控制
 async function onMinimize() { await window.api.winMinimize() }
@@ -537,11 +666,33 @@ async function onSetFloatTop(v) {
 }
 
 onMounted(async () => {
+  // 通用配置要先读出来：启动同步等行为依赖 autoSync 开关
+  try {
+    appConfig.value = await window.api.getAppConfig()
+  } catch {}
+  // 先检查云端登录态（读本地缓存，同步）
+  checkCloudLogin()
+  // 记住当前登录账号，之后换账号时才能识别出「切换」
+  if (cloudUser.value) resolveCloudUid().then((u) => { if (u) setLastSyncUid(u) })
+  // 退出前补同步
+  window.api.onFlushSync(handleFlushSync)
+
   await refresh()
   if (notes.value.length > 0) selectedId.value = notes.value[0].id
   // 速记窗等其他窗口改了数据，主窗口跟着刷新
-  window.api.onNotesChanged(refresh)
+  window.api.onNotesChanged(() => {
+    refresh()
+    // 已登录时，本地一有改动就排队上传（10 秒防抖，避免频繁请求）
+    if (cloudUser.value && appConfig.value.autoSync) schedulePush()
+  })
   window.api.onOpenNote(openNote)
+
+  // 已登录：启动后同步一轮；窗口重新获得焦点时再拉一次
+  if (cloudUser.value && appConfig.value.autoSync) runSync(true)
+  offFocusSync = () => {
+    if (cloudUser.value && appConfig.value.autoSync && document.visibilityState === 'visible') runSync(true)
+  }
+  window.addEventListener('focus', offFocusSync)
   // 「跟随系统」时，系统切换深浅色要实时跟随
   offSystemTheme = onSystemThemeChange((dark) => {
     isDark.value = dark
@@ -560,9 +711,8 @@ onMounted(async () => {
     if (cfg && typeof cfg.alwaysOnTop === 'boolean') floatTop.value = cfg.alwaysOnTop
   } catch {}
 
-  // 通用配置 / 版本号 / 检查更新提示
+  // 版本号 / 检查更新提示
   try {
-    appConfig.value = await window.api.getAppConfig()
     appVersion.value = await window.api.getAppVersion()
   } catch {}
   // 主进程启动时发现新版本会推送；这里兜底拉一次（渲染端加载晚于推送的情况）
@@ -602,6 +752,7 @@ onBeforeUnmount(() => {
   offSystemTheme?.()
   offMaximize && window.removeEventListener('maximize', offMaximize)
   offMinimize && window.removeEventListener('unmaximize', offMinimize)
+  offFocusSync && window.removeEventListener('focus', offFocusSync)
 })
 </script>
 
@@ -875,6 +1026,46 @@ onBeforeUnmount(() => {
 
       <div class="flex-1"></div>
 
+      <!-- 云同步登录入口 -->
+      <div class="px-1 pb-2">
+        <!-- 已登录：显示用户名 + 登出 -->
+        <div v-if="cloudUser" class="group flex items-center gap-2 px-2 py-1.5 rounded-lg bg-brand-soft hover:bg-brand-soft2 transition">
+          <span class="w-1.5 h-1.5 rounded-full shrink-0 shadow-[0_0_4px_rgba(7,193,96,0.6)]" :class="syncDotClass"></span>
+          <div class="flex-1 min-w-0">
+            <div class="text-[11.5px] text-brand-text font-medium truncate leading-tight">
+              {{ cloudUser.username || cloudUser.email || '已登录' }}
+            </div>
+            <div class="text-[10px] leading-tight truncate" :class="syncState.status === 'fail' ? 'text-danger' : 'text-t3'">
+              {{ syncText }}
+            </div>
+          </div>
+          <button
+            class="opacity-0 group-hover:opacity-100 text-[11px] text-t2 hover:text-brand-text transition shrink-0"
+            title="立即同步"
+            :disabled="syncing"
+            @click="runSync(false)"
+          >
+            {{ syncing ? '同步中' : '同步' }}
+          </button>
+          <button
+            class="opacity-0 group-hover:opacity-100 text-[11px] text-t2 hover:text-danger transition shrink-0"
+            title="退出登录"
+            @click="handleLogout"
+          >
+            退出
+          </button>
+        </div>
+        <!-- 未登录：登录按钮 -->
+        <button
+          v-else
+          class="w-full h-7 px-2 rounded-lg flex items-center justify-center gap-1.5 text-[11.5px] text-t2 hover:bg-brand-soft hover:text-brand-text border border-line hover:border-brand-line transition"
+          @click="openLogin"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-t3"></span>
+          登录同步
+        </button>
+      </div>
+
       <div class="border-t border-line pt-2">
         <div class="flex items-center justify-between">
           <span class="px-1 text-[11px] text-t3 truncate">{{ footerText }}</span>
@@ -1034,6 +1225,7 @@ onBeforeUnmount(() => {
       :float-top="floatTop"
       :auto-backup="appConfig.autoBackup"
       :check-update="appConfig.checkUpdate"
+      :auto-sync="appConfig.autoSync"
       :version="appVersion"
       @close="showSettings = false"
       @set-mode="setMode"
@@ -1041,6 +1233,7 @@ onBeforeUnmount(() => {
       @set-float-top="onSetFloatTop"
       @set-autobackup="setAppConfig({ autoBackup: $event })"
       @set-checkupdate="setAppConfig({ checkUpdate: $event })"
+      @set-autosync="setAppConfig({ autoSync: $event })"
       @check-update="onManualCheckUpdate"
       @show-shortcuts="showShortcuts = true"
       @export-all="onExportAll"
@@ -1073,6 +1266,12 @@ onBeforeUnmount(() => {
       :repeat="listRemind.note.remindRepeat || ''"
       @apply="applyListRemind"
       @close="listRemind = null"
+    />
+
+    <LoginDialog
+      v-if="showLogin"
+      @close="showLogin = false"
+      @success="handleLoginSuccess"
     />
 
     <OverlayHost />

@@ -43,9 +43,9 @@ const appConfigPath = () => join(app.getPath('userData'), 'app-config.json')
 
 function loadAppConfig() {
 	try {
-		return { autoBackup: true, checkUpdate: true, ...JSON.parse(readFileSync(appConfigPath(), 'utf8')) }
+		return { autoBackup: true, checkUpdate: true, autoSync: true, ...JSON.parse(readFileSync(appConfigPath(), 'utf8')) }
 	} catch {
-		return { autoBackup: true, checkUpdate: true }
+		return { autoBackup: true, checkUpdate: true, autoSync: true }
 	}
 }
 
@@ -778,10 +778,33 @@ if (!app.requestSingleInstanceLock()) {
 		})
 	})
 
-	app.on('before-quit', () => {
+	// 退出前把渲染进程里没传完的改动同步上云：通知 → 等回执（最多 8 秒）→ 再退出
+	// 云函数单个有 3 秒上限，pull+push 两段最多 ~6 秒，8 秒留足余量
+	function flushSyncInRenderer() {
+		return new Promise((resolve) => {
+			const win = mainWin
+			if (!win || win.isDestroyed()) return resolve()
+			const timer = setTimeout(resolve, 8000)
+			ipcMain.once('sync:flush-done', () => {
+				clearTimeout(timer)
+				resolve()
+			})
+			win.webContents.send('app:flush-sync')
+		})
+	}
+
+	let syncFlushed = false
+	app.on('before-quit', (e) => {
 		isQuitting = true
 		stopUndockPolling()
 		if (floatWin) floatWin.close()
+		if (!syncFlushed && mainWin && !mainWin.isDestroyed()) {
+			e.preventDefault()
+			syncFlushed = true
+			flushSyncInRenderer().finally(() => app.quit())
+			return
+		}
+		syncFlushed = true
 	})
 
 	app.on('will-quit', () => {
