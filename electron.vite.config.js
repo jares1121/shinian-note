@@ -16,6 +16,12 @@ export default defineConfig({
           quick: resolve('src/preload/quick.js'),
           reminder: resolve('src/preload/reminder.js'),
           float: resolve('src/preload/float.js')
+        },
+        output: {
+          // ESM preload 打进 asar 后无法加载（Node ESM loader 不支持 asar），
+          // 必须输出 CJS，扩展名用 .cjs 避免被 package.json 的 type:module 误判
+          format: 'cjs',
+          entryFileNames: '[name].cjs'
         }
       }
     }

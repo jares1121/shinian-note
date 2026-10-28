@@ -19,6 +19,11 @@ npmRebuild: false
 asarUnpack:
   - node_modules/better-sqlite3/**/*
 
+# 图标拷到 asar 外面：nativeImage/Tray 读 asar 内文件在打包后不可靠
+extraResources:
+  - from: assets/icon.png
+    to: icon.png
+
 win:
   icon: assets/icon.ico
   target:

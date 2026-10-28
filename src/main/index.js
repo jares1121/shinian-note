@@ -35,7 +35,11 @@ let floatDocked = false
 let tray = null
 let isQuitting = false
 
-const iconPath = () => join(import.meta.dirname, '../../assets/icon.png')
+// 打包后图标从 resources 根目录读（extraResources 拷过去的），开发时读项目 assets
+const iconPath = () =>
+	app.isPackaged
+		? join(process.resourcesPath, 'icon.png')
+		: join(import.meta.dirname, '../../assets/icon.png')
 
 /* ---------- 应用配置（通用开关：自动备份 / 检查更新）---------- */
 
@@ -174,7 +178,7 @@ function createMainWindow() {
 		icon: nativeImage.createFromPath(iconPath()),
 		titleBarStyle: 'hidden',
 		webPreferences: {
-			preload: join(import.meta.dirname, '../preload/index.mjs'),
+			preload: join(import.meta.dirname, '../preload/index.cjs'),
 			contextIsolation: true,
 			sandbox: false
 		}
@@ -210,7 +214,7 @@ function createQuickWindow() {
 		alwaysOnTop: true,
 		skipTaskbar: true,
 		webPreferences: {
-			preload: join(import.meta.dirname, '../preload/quick.mjs'),
+			preload: join(import.meta.dirname, '../preload/quick.cjs'),
 			contextIsolation: true,
 			sandbox: false
 		}
@@ -288,7 +292,7 @@ function createFloatWindow() {
 		backgroundColor: '#00000000',
 		roundedCorners: true,
 		webPreferences: {
-			preload: join(import.meta.dirname, '../preload/float.mjs'),
+			preload: join(import.meta.dirname, '../preload/float.cjs'),
 			contextIsolation: true,
 			sandbox: false
 		}
@@ -489,7 +493,7 @@ function createReminderWindow() {
 		alwaysOnTop: true,
 		skipTaskbar: true,
 		webPreferences: {
-			preload: join(import.meta.dirname, '../preload/reminder.mjs'),
+			preload: join(import.meta.dirname, '../preload/reminder.cjs'),
 			contextIsolation: true,
 			sandbox: false,
 			autoplayPolicy: 'no-user-gesture-required' // 允许提示音直接播放
